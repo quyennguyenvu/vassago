@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - name: Check tag matches Info.plist version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          plist="$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$plist" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Info.plist version $plist"
+            exit 1
+          fi
+
+      # the gate scripts/release.sh runs locally: a hand-pushed tag or
+      # --skip-checks must not publish an untested build
+      - name: Tests
+        run: bash scripts/test.sh
+
+      # scripts/bundle.sh renders the icon from Resources/icon.svg
+      - name: Install librsvg
+        run: brew install librsvg
+
+      # macOS ties the Accessibility permission to the signer, so every release
+      # is signed with the one self-signed "Agares Dev" certificate.
+      - name: Import the signing certificate
+        env:
+          SIGNING_P12_BASE64: ${{ secrets.SIGNING_P12_BASE64 }}
+          SIGNING_P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_P12_BASE64" ]; then
+            echo "::error::secret SIGNING_P12_BASE64 is not set; see README, Releasing"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          echo "$SIGNING_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/signing.p12" -P "$SIGNING_P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          security list-keychain -d user -s "$keychain"
+          rm "$RUNNER_TEMP/signing.p12"
+
+      - name: Build, sign and package
+        env:
+          SWIFT_BUILD_FLAGS: --arch arm64 --arch x86_64
+        run: bash scripts/bundle.sh dmg
+
+      # a build signed by any other certificate would silently cost every user
+      # their Accessibility permission, so refuse to publish one
+      - name: Check the signer
+        env:
+          EXPECTED_LEAF: 87f39eab1a9700cb9f102e793f8f38be55510b71
+        run: |
+          requirement="$(codesign -d -r- build/Vassago.app 2>&1)"
+          if ! printf '%s' "$requirement" | grep -q "certificate leaf = H\"$EXPECTED_LEAF\""; then
+            echo "::error::build is not signed by the expected Agares Dev certificate"
+            printf '%s\n' "$requirement"
+            exit 1
+          fi
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: build/*.dmg
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: installer
+          path: build/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # must precede download-artifact: checkout cleans the workspace
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          path: installers
+          merge-multiple: true
+
+      # users are told to bypass Gatekeeper for this file, so give them
+      # something to check the download against first
+      - name: Generate checksums
+        working-directory: installers
+        run: sha256sum *.dmg | tee SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3
+        with:
+          generate_release_notes: true
+          body_path: .github/release-body.md
+          files: |
+            installers/*.dmg
+            installers/SHA256SUMS.txt
