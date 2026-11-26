@@ -25,7 +25,7 @@ Vassago is a separate app from Agares and changes nothing in it. It copies Agare
 | Finding an older item | **Scroll.** Digits reach the nine newest, arrow keys the rest. | Type to filter, as in Ditto: digits would then belong to the search, and the list would need a text field. It can be added later. |
 | The pop-up list | **A native macOS menu** opened at the mouse pointer. macOS supplies the arrow keys, Enter, Esc, scrolling, screen edges, full-screen apps and several displays, and a menu does not take focus from the app in front. | A floating window in the panel's style, driven by a key hook: full control of the look, but all of the above written by hand. A window that takes focus, as Spotlight does: some apps lose their cursor or close a pop-over when focus leaves, so the paste can land in the wrong place. |
 | Hotkey mechanism | **The system hotkey API** (`RegisterEventHotKey`). It needs no permission and no key hook. | An event tap, as Agares uses: needs Accessibility just to see the hotkey, and puts Vassago in the path of every keystroke. |
-| Default hotkey | **Control+Option+V**, recordable in the panel. | Control+` (Ditto's default): VS Code's terminal toggle. Command+Shift+V: paste and match style in many apps. |
+| Default hotkey | **Control+Command+V**, recordable in the panel: pinky, thumb and index finger of one hand. | Control+Option+V, the first default: an awkward stretch for one hand. Control+` (Ditto's default): VS Code's terminal toggle. Command+Shift+V: paste and match style in many apps. |
 | Watching the clipboard | **Ask for the clipboard's change counter every 0.3 seconds** on a background queue, and read the contents only when it has moved. macOS has no notification for a clipboard change. | A slower poll, such as Agares's 2-second tick: two copies made inside one interval would record only the second. |
 | After a paste | **The list keeps its order, and the picked item stays on the clipboard.** Working down a run of items, each one stays at the number it had. | Moving the pasted item to the top, as Ditto does by default: every paste would renumber the rest. Putting the earlier clipboard back afterwards: needs a guessed delay for the target app to finish pasting. |
 | Secrets | **Skip anything the copying app marks as concealed or transient** (the nspasteboard.org markers, which KeePassXC and 1Password set). | Recognising password managers by name: every one is a new case. |
@@ -134,7 +134,7 @@ Whatever `add`, `remove` and `removeAll` return is what the store deletes from d
 
 ### 5.1 The list
 
-Control+Option+V opens a native menu at the mouse pointer, with every clip, newest first.
+The hotkey opens a native menu at the mouse pointer, with every clip, newest first.
 
 ```text
 ┌──────────────────────────────────────┐
@@ -149,6 +149,7 @@ Control+Option+V opens a native menu at the mouse pointer, with every clip, newe
 
 - A row shows the title. An image clip and a files clip have their thumbnail in front (section 3.4).
 - The nine newest rows have the digits 1 to 9 as key equivalents, with no modifier. Arrow keys and Enter, or a click, pick any row. Esc closes the list.
+- While the list is open and Accessibility is granted, an event tap takes the digit keys and Return before the menu does, closes the menu without its animation, and picks the row. Picked through the menu itself, a row arrives only after the closing animation, about 350 ms later (measured on macOS 27.2.1, 2026-11-26). The tap is removed when the list closes. A click, and the menu bar item's list, still go through the menu.
 - With an empty history the list is one disabled row, "Nothing copied yet".
 - Each missing permission adds a row above the clips, clipboard access first: "Clipboard access is off…", which opens the panel, and "Grant Accessibility to paste directly…", which opens the Settings pane.
 
@@ -170,7 +171,7 @@ Agares's key hook sees the Command+V that Vassago posts. It passes it through un
 
 A hotkey is a set of modifiers (Control, Option, Shift, Command) with one key. It is valid when Control, Option or Command is among the modifiers; Command+Tab is never a hotkey. The modifiers-alone shape that Agares has is left out, because the system hotkey API cannot register it.
 
-- **Default:** Control+Option+V.
+- **Default:** Control+Command+V.
 - **Registration:** `RegisterEventHotKey`, when the app starts and whenever the hotkey changes. If macOS refuses a new hotkey, the panel says the shortcut could not be registered and the previous one stays.
 - **Recording:** Record… in the panel unregisters the current hotkey, so that pressing it again can be captured, and sends the panel window's key presses to the recorder. The next valid combination becomes the hotkey. Escape alone, or the panel losing focus, cancels and registers the previous hotkey again.
 - **Storage:** `UserDefaults` keys `hotkeyModifiers` (bit set) and `hotkeyKeyCode`. A stored value that is not valid falls back to the default.
@@ -188,8 +189,8 @@ One fixed-size window, 420 points wide, in Agares's dark style with ember accent
 │  ☑ Keep clipboard history                │
 │                                          │
 │  HOTKEY                                  │
-│  (⌃ ⌥ V)                                 │
-│  Press Control + Option + V to open the  │
+│  (⌃ ⌘ V)                                 │
+│  Press Control + Command + V to open the │
 │  list.                                   │
 │  [Record…]                               │
 │                                          │

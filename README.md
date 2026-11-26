@@ -13,7 +13,7 @@ A clipboard history for macOS. Copy several things in one place, then paste each
 
 ## Why Vassago
 
-**Copy many, then paste many.** A page lists five order codes and each needs its own browser tab. Copy all five, then in each tab press ⌃⌥V (Control + Option + V) and a digit. No switching back for the next code.
+**Copy many, then paste many.** A page lists five order codes and each needs its own browser tab. Copy all five, then in each tab press ⌃⌘V (Control + Command + V) and a digit. No switching back for the next code.
 
 **The list never takes your cursor.** It is an ordinary macOS menu, so the app you are pasting into keeps the keyboard focus and the paste lands where you were typing.
 
@@ -51,7 +51,7 @@ xattr -dr com.apple.quarantine /Applications/Vassago.app
 
 | Permission | Where | Why |
 | --- | --- | --- |
-| Accessibility | **Privacy & Security → Accessibility → Vassago** | Vassago presses Command+V for you when you pick a clip. Without it, a pick only puts the clip on the clipboard. |
+| Accessibility | **Privacy & Security → Accessibility → Vassago** | Vassago presses Command+V for you when you pick a clip. While the list is open, and only then, it also takes the digit and Return keys itself, so that the pick pastes at once. Without it, a pick only puts the clip on the clipboard. |
 | Clipboard access | Usually nothing to do | Vassago reads the clipboard each time you copy. On macOS 27.2 it is allowed to without asking. If macOS does ask, or the menu bar shows `⚠`, choose **Always Allow** for Vassago under **Privacy & Security → Paste from Other Apps**. |
 
 ### Updating
@@ -76,7 +76,7 @@ gh attestation verify Vassago-<version>.dmg --repo quyennguyenvu/vassago
 
 ## Using it
 
-- **Open the list** with ⌃⌥V. Digits 1 to 9 paste the nine newest clips; the arrow keys and Enter, or a click, reach the rest. Esc closes it.
+- **Open the list** with ⌃⌘V. Digits 1 to 9 paste the nine newest clips; the arrow keys and Enter, or a click, reach the rest. Esc closes it.
 - **The menu bar item** shows the nine newest clips too, for the mouse.
 - **Open the panel** from the menu bar item, or by opening Vassago again from Launchpad or Spotlight. It holds the on/off switch, the hotkey, the whole history, Launch at login and Check for Updates. A click on a row copies it back; the × deletes it.
 - **Change the hotkey** with **Record…** in the panel. It must include Control, Option or Command.

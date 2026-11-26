@@ -1,10 +1,10 @@
 import Testing
 @testable import VassagoEngine
 
-@Test func theDefaultIsControlOptionV() {
-    #expect(Hotkey.standard == Hotkey(modifiers: [.control, .option], keyCode: 9))
+@Test func theDefaultIsControlCommandV() {
+    #expect(Hotkey.standard == Hotkey(modifiers: [.control, .command], keyCode: 9))
     #expect(Hotkey.standard.isValid)
-    #expect(Hotkey.standard.name == "Control + Option + V")
+    #expect(Hotkey.standard.name == "Control + Command + V")
 }
 
 @Test func aShortcutNeedsControlOptionOrCommand() {
@@ -20,7 +20,7 @@ import Testing
 }
 
 @Test func showsKeycapsInMacOSOrder() {
-    #expect(Hotkey.standard.keycaps == ["⌃", "⌥", "V"])
+    #expect(Hotkey.standard.keycaps == ["⌃", "⌘", "V"])
     #expect(Hotkey(modifiers: [.command, .shift, .control], keyCode: 49).keycaps == ["⌃", "⇧", "⌘", "Space"])
     #expect(Hotkey(modifiers: [.control], keyCode: 200).keycaps == ["⌃", "Key 200"])
 }

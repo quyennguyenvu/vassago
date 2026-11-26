@@ -23,8 +23,8 @@ public struct Hotkey: Equatable {
         self.keyCode = keyCode
     }
 
-    /// Control + Option + V, the default.
-    public static let standard = Hotkey(modifiers: [.control, .option], keyCode: 9)
+    /// Control + Command + V, the default: pinky, thumb and index finger of one hand.
+    public static let standard = Hotkey(modifiers: [.control, .command], keyCode: 9)
 
     /// Control, Option or Command must be held, and Command+Tab stays with the app switcher.
     public var isValid: Bool {
@@ -38,7 +38,7 @@ public struct Hotkey: Equatable {
         return symbols.filter { modifiers.contains($0.0) }.map(\.1) + [keyLabels[keyCode] ?? "Key \(keyCode)"]
     }
 
-    /// The shortcut in words, for anyone who does not read ⌃ as Control: "Control + Option + V".
+    /// The shortcut in words, for anyone who does not read ⌃ as Control: "Control + Command + V".
     public var name: String {
         let words: [(Modifiers, String)] = [(.control, "Control"), (.option, "Option"), (.shift, "Shift"), (.command, "Command")]
         let parts = words.filter { modifiers.contains($0.0) }.map(\.1) + [keyLabels[keyCode] ?? "Key \(keyCode)"]
