@@ -21,6 +21,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The limits the panel offers: clips kept, and megabytes their data may take.
+    static let clipChoices = [25, 50, 100, 200, 500]
+    static let megabyteChoices = [50, 100, 200, 500, 1000]
+    /// Minutes the Mac's clipboard may hold the same thing before Vassago empties it. 0 never empties it.
+    static let clearChoices = [0, 1, 5, 10, 30, 60]
+    private static let standardClips = 100
+    private static let standardMegabytes = 200
+
+    @Published private(set) var maxClips: Int
+    @Published private(set) var maxMegabytes: Int
+    @Published var clearMinutes: Int {
+        didSet {
+            defaults.set(clearMinutes, forKey: "clearMinutes")
+            clipboard.setClearing(afterMinutes: clearMinutes)
+        }
+    }
+
     /// The history, newest first.
     @Published private(set) var clips: [Clip] = []
 
@@ -45,6 +62,8 @@ final class AppModel: ObservableObject {
 
     /// The clip a click in the panel has just copied, for a moment.
     @Published private(set) var copied: String?
+    /// The text in the panel's search field. Here, not @State in the view: Command Line Tools ships no plugin for that macro.
+    @Published var query = ""
 
     /// Called on the main thread when what the menu bar item shows has changed.
     var stateChanged: () -> Void = {}
@@ -67,6 +86,13 @@ final class AppModel: ObservableObject {
         defaults.register(defaults: ["keepsHistory": true])
         keepsHistory = defaults.bool(forKey: "keepsHistory")
         hotkey = Self.storedHotkey(in: defaults)
+        // A stored limit the panel does not offer could not be shown there, so the default takes its place.
+        let stored = { (key: String, choices: [Int], standard: Int) in
+            choices.contains(defaults.integer(forKey: key)) ? defaults.integer(forKey: key) : standard
+        }
+        maxClips = stored("maxClips", Self.clipChoices, Self.standardClips)
+        maxMegabytes = stored("maxMegabytes", Self.megabyteChoices, Self.standardMegabytes)
+        clearMinutes = stored("clearMinutes", Self.clearChoices, 0)
     }
 
     /// Loads the history, registers the hotkey, asks for the permissions once, and starts watching both.
@@ -77,7 +103,8 @@ final class AppModel: ObservableObject {
             let kept = Set(clips.map(\.id))
             self.thumbnails = self.thumbnails.filter { kept.contains($0.key) }
         }
-        clipboard.start()
+        clipboard.start(maxCount: maxClips, maxBytes: maxMegabytes * 1_000_000)
+        clipboard.setClearing(afterMinutes: clearMinutes)
         globalHotkey.onPress = { [weak self] in self?.onHotkey() }
         hotkeyRefused = !globalHotkey.register(hotkey)
         requestAccessibility()
@@ -140,6 +167,56 @@ final class AppModel: ObservableObject {
         if alert.runModal() == .alertFirstButtonReturn { clipboard.clear() }
     }
 
+    /// Asks first when clips have to go to fit the new limits: they cannot be brought back.
+    func setLimits(clips maxClips: Int, megabytes maxMegabytes: Int) {
+        let over = clipsOver(maxClips, maxMegabytes)
+        if over > 0 {
+            let alert = NSAlert()
+            alert.messageText = over == 1 ? "Delete the oldest clip?" : "Delete the \(over) oldest clips?"
+            alert.informativeText = "The history does not fit the new limit otherwise. This cannot be undone."
+            alert.addButton(withTitle: "Delete")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        applyLimits(maxClips, maxMegabytes)
+    }
+
+    /// How many of the oldest clips these limits would push out.
+    private func clipsOver(_ maxClips: Int, _ maxMegabytes: Int) -> Int {
+        var fitted = History(clips: clips)
+        return fitted.limit(maxCount: maxClips, maxBytes: maxMegabytes * 1_000_000).count
+    }
+
+    private func applyLimits(_ maxClips: Int, _ maxMegabytes: Int) {
+        self.maxClips = maxClips
+        self.maxMegabytes = maxMegabytes
+        defaults.set(maxClips, forKey: "maxClips")
+        defaults.set(maxMegabytes, forKey: "maxMegabytes")
+        clipboard.setLimits(maxCount: maxClips, maxBytes: maxMegabytes * 1_000_000)
+    }
+
+    /// Puts every setting in the panel back as a new install has it. Asks first, and says so when clips go with it.
+    func resetSettings() {
+        let over = clipsOver(Self.standardClips, Self.standardMegabytes)
+        let alert = NSAlert()
+        alert.messageText = "Reset all settings?"
+        alert.informativeText = "Hotkey: \(Hotkey.standard.name). History: on, \(Self.standardClips) clips, \(Self.standardMegabytes) MB. "
+            + "Clear the macOS clipboard: never. Launch at login: off. Permissions stay as they are. "
+            + (over == 0 ? "No clip is deleted."
+                : over == 1 ? "The oldest clip no longer fits and is deleted. This cannot be undone."
+                : "The \(over) oldest clips no longer fit and are deleted. This cannot be undone.")
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        keepsHistory = true
+        applyLimits(Self.standardClips, Self.standardMegabytes)
+        clearMinutes = 0
+        hotkeyRefused = false
+        // Registers the standard shortcut as a recording would, and keeps the current one if macOS refuses it.
+        finishRecording(.standard)
+        if launchAtLogin { setLaunchAtLogin(false) }
+    }
+
     /// The picture in front of an image or files row, sized to fit 64 × 32 points.
     func thumbnail(of clip: Clip) -> NSImage? {
         guard clip.kind != .text else { return nil }
@@ -188,7 +265,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func modifiers(_ flags: NSEvent.ModifierFlags) -> Modifiers {
+    static func modifiers(_ flags: NSEvent.ModifierFlags) -> Modifiers {
         var held: Modifiers = []
         if flags.contains(.control) { held.insert(.control) }
         if flags.contains(.option) { held.insert(.option) }
@@ -293,4 +370,14 @@ final class AppModel: ObservableObject {
         guard let latest, let current = UpdateCheck.current else { return }
         availableVersion = latest > current ? latest : nil
     }
+}
+
+/// True when a clip's title has the search text, whatever its case or accents. The panel and the list both search with it.
+// shortcut: only the title is searched, not the text past a clip's first line; keep each clip's text in the index when a search misses for that.
+func matches(title: String, query: String) -> Bool {
+    // đ has no accent to strip, so the standard comparison keeps it apart from d.
+    func folded(_ text: String) -> String {
+        text.replacingOccurrences(of: "đ", with: "d").replacingOccurrences(of: "Đ", with: "D")
+    }
+    return query.isEmpty || folded(title).localizedStandardContains(folded(query))
 }

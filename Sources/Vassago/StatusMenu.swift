@@ -104,10 +104,19 @@ final class StatusMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alsoClose.isHidden = true
         alsoClose.allowsKeyEquivalentWhenHidden = true
 
+        // The panel's search field gets ⌘X, ⌘C, ⌘V and ⌘A only through a menu.
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
         let main = NSMenu()
-        let item = NSMenuItem()
-        item.submenu = app
-        main.addItem(item)
+        for menu in [app, edit] {
+            let item = NSMenuItem()
+            item.submenu = menu
+            main.addItem(item)
+        }
         return main
     }
 }

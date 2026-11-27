@@ -36,6 +36,31 @@ private func clip(_ id: String, bytes: Int = 10, digest: String? = nil) -> Clip 
     #expect(history.clips.map(\.id) == ["a"])
 }
 
+@Test func aLowerCountReturnsTheOldestClipsOverIt() {
+    var history = History(clips: [clip("c"), clip("b"), clip("a")])
+    #expect(history.limit(maxCount: 1, maxBytes: 1000).map(\.id) == ["a", "b"])
+    #expect(history.clips.map(\.id) == ["c"])
+}
+
+@Test func aLowerSizeReturnsTheOldestClipsUntilTheRestFits() {
+    var history = History(clips: [clip("c", bytes: 40), clip("b", bytes: 40), clip("a", bytes: 40)])
+    #expect(history.limit(maxCount: 100, maxBytes: 100).map(\.id) == ["a"])
+    #expect(history.clips.map(\.id) == ["c", "b"])
+}
+
+@Test func higherLimitsDropNothingAndHoldForTheNextClips() {
+    var history = History(clips: [clip("b"), clip("a")], maxCount: 2)
+    #expect(history.limit(maxCount: 3, maxBytes: 1000).isEmpty)
+    #expect(history.add(clip("c")).isEmpty)
+    #expect(history.add(clip("d")).map(\.id) == ["a"])
+}
+
+@Test func theNewestClipStaysWhateverTheNewLimits() {
+    var history = History(clips: [clip("b", bytes: 500), clip("a")])
+    #expect(history.limit(maxCount: 1, maxBytes: 100).map(\.id) == ["a"])
+    #expect(history.clips.map(\.id) == ["b"])
+}
+
 @Test func removingAClipReturnsItForDeletion() {
     var history = History(clips: [clip("b"), clip("a")])
     #expect(history.remove(id: "a")?.id == "a")
@@ -63,6 +88,23 @@ func theTitleIsTheFirstLineWithItsWhitespaceTidied(text: String, expected: Strin
     let sixty = String(repeating: "x", count: 60)
     #expect(title(forText: sixty) == sixty)
     #expect(title(forText: sixty + "y") == String(repeating: "x", count: 59) + "…")
+}
+
+@Test func aTitleThatFitsTheListIsLeftAlone() {
+    #expect(shortened("ORD-10005") { $0.count <= 10 } == "ORD-10005")
+}
+
+@Test func aTitleTooWideForTheListKeepsAsMuchAsFits() {
+    // Nine characters and the … are the ten that fit.
+    #expect(shortened("explain analyze select") { $0.count <= 10 } == "explain a…")
+    // Width is not a count of characters: here a W is as wide as three of the others.
+    let width: (String) -> Int = { $0.reduce(0) { $0 + ($1 == "W" ? 3 : 1) } }
+    #expect(shortened("WWWWabcdef") { width($0) <= 10 } == "WWW…")
+    #expect(shortened("abcdefWWWW") { width($0) <= 10 } == "abcdefW…")
+}
+
+@Test func whenNothingFitsOnlyTheEllipsisIsLeft() {
+    #expect(shortened("ORD-10005") { _ in false } == "…")
 }
 
 @Test func atLaunchClipsWithoutDataAreDroppedAndStrayFilesAreListed() {

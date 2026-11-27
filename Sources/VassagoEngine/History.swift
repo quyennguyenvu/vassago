@@ -26,8 +26,8 @@ public struct Clip: Codable, Equatable {
 /// The clips, newest first, held to a count and a total size.
 public struct History {
     public private(set) var clips: [Clip]
-    private let maxCount: Int
-    private let maxBytes: Int
+    private var maxCount: Int
+    private var maxBytes: Int
 
     public init(clips: [Clip] = [], maxCount: Int = 100, maxBytes: Int = 200_000_000) {
         self.clips = clips
@@ -38,10 +38,22 @@ public struct History {
     /// Puts the clip on top. Returns the clips it pushed out, whose files are to be deleted:
     /// an older copy of the same content, then the oldest clips over a limit.
     public mutating func add(_ clip: Clip) -> [Clip] {
-        var dropped = clips.filter { $0.digest == clip.digest }
+        let dropped = clips.filter { $0.digest == clip.digest }
         clips.removeAll { $0.digest == clip.digest }
         clips.insert(clip, at: 0)
-        // The clip just added stays, whatever its size.
+        return dropped + trim()
+    }
+
+    /// Sets new limits. Returns the clips now over them, oldest first, whose files are to be deleted.
+    public mutating func limit(maxCount: Int, maxBytes: Int) -> [Clip] {
+        self.maxCount = maxCount
+        self.maxBytes = maxBytes
+        return trim()
+    }
+
+    private mutating func trim() -> [Clip] {
+        var dropped: [Clip] = []
+        // The newest clip stays, whatever its size.
         while clips.count > 1, clips.count > maxCount || clips.reduce(0, { $0 + $1.bytes }) > maxBytes {
             dropped.append(clips.removeLast())
         }
@@ -66,6 +78,19 @@ public func title(forText text: String) -> String {
         .map { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         .first { !$0.isEmpty } ?? ""
     return line.count > 60 ? String(line.prefix(59)) + "…" : line
+}
+
+/// The title as the list draws it: whole when it fits, otherwise its longest beginning that fits with … after it.
+/// A menu is as wide as its widest row, so this is what keeps the list narrow. `fits` is asked about a
+/// handful of beginnings, and must accept a shorter text whenever it accepts a longer one.
+public func shortened(_ title: String, toFit fits: (String) -> Bool) -> String {
+    if fits(title) { return title }
+    var low = 0, high = title.count
+    while low < high {
+        let middle = (low + high + 1) / 2
+        if fits(String(title.prefix(middle)) + "…") { low = middle } else { high = middle - 1 }
+    }
+    return String(title.prefix(low)) + "…"
 }
 
 /// What to keep at launch. A clip stays when its data file `<id>.plist` is in `files`, the names

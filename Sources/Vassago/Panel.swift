@@ -65,19 +65,46 @@ private enum Palette {
 private struct PanelView: View {
     @ObservedObject var model: AppModel
 
+    private var shown: [Clip] {
+        model.clips.filter { matches(title: $0.title, query: model.query) }
+    }
+
     var body: some View {
         VStack(spacing: 22) {
             Text("Vassago")
                 .font(.system(size: 26, weight: .bold, design: .rounded))
                 .foregroundStyle(Palette.ember)
-            Toggle("Keep clipboard history", isOn: $model.keepsHistory)
-                .toggleStyle(.checkbox)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // The limits share the switch's row, so the panel grows no taller (see the list's height below).
+            HStack(spacing: 8) {
+                Toggle("Keep clipboard history", isOn: $model.keepsHistory)
+                    .toggleStyle(.checkbox)
+                // The row measures 350 points at its narrowest, of the 364 there are.
+                Spacer(minLength: 0)
+                choice("Most clips kept", model.maxClips, AppModel.clipChoices, { "\($0) clips" }) {
+                    model.setLimits(clips: $0, megabytes: model.maxMegabytes)
+                }
+                .help("Most clips kept. The oldest are deleted to stay under it.")
+                choice("Most space the clips take", model.maxMegabytes, AppModel.megabyteChoices, { $0 < 1000 ? "\($0) MB" : "\($0 / 1000) GB" }) {
+                    model.setLimits(clips: model.maxClips, megabytes: $0)
+                }
+                .help("Most space the clips take. The oldest are deleted to stay under it.")
+            }
+            HStack(spacing: 8) {
+                // The pop-up has the same name for VoiceOver.
+                Text("Clear the macOS clipboard").accessibilityHidden(true)
+                Spacer(minLength: 0)
+                choice("Clear the macOS clipboard", model.clearMinutes, AppModel.clearChoices, wait) { model.clearMinutes = $0 }
+                    .help("Empties the clipboard once it has held the same thing this long. The clip stays in the history.")
+            }
             hotkeySection
             historySection
-            Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
-                .toggleStyle(.checkbox)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+                    .toggleStyle(.checkbox)
+                Spacer()
+                Button("Reset to Defaults…", action: model.resetSettings)
+                    .controlSize(.small)
+            }
             footer
         }
         .padding(EdgeInsets(top: 40, leading: 28, bottom: 24, trailing: 28))
@@ -129,21 +156,25 @@ private struct PanelView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 heading("HISTORY")
-                Spacer()
+                // In the heading's row, so the panel grows no taller (see the list's height below).
+                TextField("Search", text: $model.query)
+                    .textFieldStyle(.roundedBorder)
+                    // The recorder lets a key without a modifier through, and it would be typed here.
+                    .disabled(model.recording)
                 Button("Clear All", action: model.clearHistory)
                     .disabled(model.clips.isEmpty)
             }
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(model.clips, id: \.id) { clip in
+                    ForEach(shown, id: \.id) { clip in
                         ClipRow(model: model, clip: clip)
                     }
                 }
             }
-            // Six rows: with eight the panel was 819 points tall, too tall for a 900-point screen with the Dock showing.
-            .frame(height: 204)
+            // Five rows: with eight the panel was 819 points tall, too tall for a 900-point screen with the Dock showing.
+            .frame(height: 170)
             .overlay {
-                if model.clips.isEmpty { note("Nothing copied yet") }
+                if shown.isEmpty { note(model.clips.isEmpty ? "Nothing copied yet" : "No clip matches") }
             }
         }
         .padding(14)
@@ -198,6 +229,25 @@ private struct PanelView: View {
             }
         }
         .font(.system(size: 12))
+    }
+
+    /// A small pop-up for one setting. The name is for VoiceOver.
+    private func choice(_ name: String, _ value: Int, _ choices: [Int], _ label: @escaping (Int) -> String, set: @escaping (Int) -> Void) -> some View {
+        Picker(name, selection: Binding(get: { value }, set: set)) {
+            ForEach(choices, id: \.self) { Text(verbatim: label($0)).tag($0) }
+        }
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+    }
+
+    private func wait(_ minutes: Int) -> String {
+        switch minutes {
+        case 0: return "Never"
+        case 1: return "After 1 minute"
+        case 60: return "After 1 hour"
+        default: return "After \(minutes) minutes"
+        }
     }
 
     private func heading(_ text: String) -> some View {

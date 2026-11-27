@@ -8,6 +8,15 @@ final class HistoryMenu: NSObject {
     private var list: NSMenu?
     /// The row a key picked, until the pop-up has closed.
     private var picked: NSMenuItem?
+    /// The pop-up's first row, which shows the search. Nil without the key tap: nothing could be typed.
+    private var searchRow: NSMenuItem?
+    /// What has been typed since `/` started a search in the pop-up. Nil until then.
+    private var query: String?
+    /// The most a row's title may take, in points: about 39 characters. The list is then some 300 points
+    /// wide. Uncut, a 60-character title made it over 560, a third of a 1920-point screen.
+    private static let titleWidth: CGFloat = 240
+    /// Each clip's title as cut for the list, by id. Measuring them again on every opening took 20 ms for 100 clips.
+    private var cut: [String: String] = [:]
 
     init(model: AppModel) {
         self.model = model
@@ -19,21 +28,31 @@ final class HistoryMenu: NSObject {
         guard list == nil else { return }
         let menu = NSMenu()
         addPermissionRows(to: menu)
-        addClips(to: menu, limit: .max)
-        list = menu
         let tap = keyTap()
+        // At the top, the one edge of a menu that stays put while a search hides rows.
+        if tap != nil, !model.clips.isEmpty {
+            searchRow = menu.addItem(withTitle: "Type / to search", action: nil, keyEquivalent: "")
+            searchRow?.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+            menu.addItem(.separator())
+        }
+        addClips(to: menu, limit: .max)
+        // Otherwise the list gets narrower each time a search hides its widest row.
+        menu.minimumWidth = menu.size.width
+        list = menu
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         // Invalidating the tap also takes it off the run loop.
         if let tap { CFMachPortInvalidate(tap) }
         list = nil
+        searchRow = nil
+        query = nil
         if let picked {
             self.picked = nil
             NSApp.sendAction(picked.action!, to: picked.target, from: picked)
         }
     }
 
-    /// Takes the digit and Return keys while the pop-up is open. A row picked through the menu itself
-    /// arrives only after the menu's closing animation, about a third of a second later.
+    /// Takes the keys that pick a row or type into the search while the pop-up is open. A row picked
+    /// through the menu itself arrives only after the menu's closing animation, about a third of a second later.
     /// Nil without Accessibility: the menu's own key equivalents still pick, and a pick only copies then.
     private func keyTap() -> CFMachPort? {
         guard AXIsProcessTrusted(), let tap = CGEvent.tapCreate(
@@ -48,17 +67,57 @@ final class HistoryMenu: NSObject {
         return tap
     }
 
-    /// True when the key picked a row: the pop-up then closes at once, and `popUp` acts on the row.
+    /// True when the key was used here and is kept from the menu: it picked a row or went into the search.
     private func take(_ event: CGEvent) -> Bool {
-        // With Command, Control or Option held, the key is left to the menu as before.
-        guard let list, event.flags.isDisjoint(with: [.maskCommand, .maskControl, .maskAlternate]),
-              let typed = NSEvent(cgEvent: event)?.charactersIgnoringModifiers, !typed.isEmpty else { return false }
-        // Return and Enter pick the highlighted row; any other key picks the row it is the key equivalent of.
-        let row = typed == "\r" || typed == "\u{3}" ? list.highlightedItem : list.items.first { $0.keyEquivalent == typed }
+        guard let list, let key = NSEvent(cgEvent: event), let typed = key.characters else { return false }
+        let shown = list.items.filter { $0.representedObject != nil && !$0.isHidden }
+        switch ListKeys.keyPressed(typed, held: AppModel.modifiers(key.modifierFlags), searching: query != nil) {
+        case .pick(let number):
+            return close(picking: number <= shown.count ? shown[number - 1] : nil)
+        case .pickCurrent:
+            let highlighted = list.highlightedItem.flatMap { $0.isHidden ? nil : $0 }
+            // No row can be highlighted from code, so Return on a search takes its top match.
+            return close(picking: highlighted ?? (query == nil ? nil : shown.first))
+        case .startSearch:
+            guard searchRow != nil else { return false }
+            query = ""
+        case .type(let text):
+            query?.append(text)
+        case .erase:
+            if query?.isEmpty == false { query?.removeLast() }
+        case .pass:
+            return false
+        }
+        showMatches()
+        return true
+    }
+
+    /// True when there is such a row: the pop-up then closes at once, and `popUp` acts on the row.
+    private func close(picking row: NSMenuItem?) -> Bool {
         guard let row, row.action != nil else { return false }
         picked = row
-        list.cancelTrackingWithoutAnimation()
+        list?.cancelTrackingWithoutAnimation()
         return true
+    }
+
+    /// Leaves only the clips whose title has the search text, numbered again from the top.
+    private func showMatches() {
+        guard let list, let query else { return }
+        // A row's own title may be cut short, and the search is in the whole one.
+        let titles = Dictionary(model.clips.map { ($0.id, $0.title) }) { first, _ in first }
+        var shown = 0
+        for row in list.items where row.representedObject != nil {
+            row.isHidden = !matches(title: titles[row.representedObject as? String ?? ""] ?? row.title, query: query)
+            if !row.isHidden { shown += 1 }
+            row.keyEquivalent = !row.isHidden && shown <= 9 ? String(shown) : ""
+            // A bare digit is typed into the search now, so the rows show ⌘1 to ⌘9.
+            row.keyEquivalentModifierMask = .command
+        }
+        let text = "Search: \(query)" + (shown == 0 ? "  (no clip matches)" : "")
+        searchRow?.title = text
+        // In the label colour: a disabled row's plain title is dimmed, and this is what the user is typing.
+        searchRow?.attributedTitle = NSAttributedString(
+            string: text, attributes: [.foregroundColor: NSColor.labelColor, .font: NSFont.menuFont(ofSize: 0)])
     }
 
     /// A row for each missing permission, clipboard access first.
@@ -75,15 +134,23 @@ final class HistoryMenu: NSObject {
             // With no action the row is disabled.
             menu.addItem(withTitle: "Nothing copied yet", action: nil, keyEquivalent: "")
         }
+        let font: NSFont = menu.font
+        let kept = Set(model.clips.map(\.id))
+        cut = cut.filter { kept.contains($0.key) }
         for (index, clip) in model.clips.prefix(limit).enumerated() {
-            let item = add(clip.title, #selector(pick(_:)), to: menu)
+            let image = model.thumbnail(of: clip)
+            // A thumbnail and the gap after it come out of the same width.
+            let room = Self.titleWidth - (image.map { $0.size.width + 8 } ?? 0)
+            let title = cut[clip.id] ?? shortened(clip.title) { ($0 as NSString).size(withAttributes: [.font: font]).width <= room }
+            cut[clip.id] = title
+            let item = add(title, #selector(pick(_:)), to: menu)
             // The nine newest are one digit away.
             if index < 9 {
                 item.keyEquivalent = String(index + 1)
                 item.keyEquivalentModifierMask = []
             }
             item.representedObject = clip.id
-            item.image = model.thumbnail(of: clip)
+            item.image = image
         }
     }
 

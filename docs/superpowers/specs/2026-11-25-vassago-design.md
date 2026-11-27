@@ -22,11 +22,12 @@ Vassago is a separate app from Agares and changes nothing in it. It copies Agare
 | Paste flow | **Pick from a list**, as in Ditto: hotkey, then a digit, or arrows and Enter. | A second hotkey that pastes the copied items one after another in the order copied: fastest for the order-code case, but a second feature with its own state. |
 | What is kept | **Text with its formatting, images, and files.** | Plain text only: smallest, but no screenshots and no copied files. |
 | Persistence | **Saved to disk**, so the history survives a quit or a restart. | Memory only: nothing copied ever reaches the disk, but the history is gone after a restart. |
-| Finding an older item | **Scroll.** Digits reach the nine newest, arrow keys the rest. | Type to filter, as in Ditto: digits would then belong to the search, and the list would need a text field. It can be added later. |
+| Finding an older item | **Scroll, or press `/` and type** (the search was added on 2026-11-27). Digits pick the nine newest until `/` starts a search. From then on they are typed like any other character, and Command with a digit picks. | Type to filter from the first key, as in Ditto: digits would then belong to the search, and hotkey-then-digit would be gone. A bare digit that always picks, with Option held to type one: one rule, but a chord for every digit of an order code. A text field in the list: it would take the keyboard focus from the app in front. |
 | The pop-up list | **A native macOS menu** opened at the mouse pointer. macOS supplies the arrow keys, Enter, Esc, scrolling, screen edges, full-screen apps and several displays, and a menu does not take focus from the app in front. | A floating window in the panel's style, driven by a key hook: full control of the look, but all of the above written by hand. A window that takes focus, as Spotlight does: some apps lose their cursor or close a pop-over when focus leaves, so the paste can land in the wrong place. |
 | Hotkey mechanism | **The system hotkey API** (`RegisterEventHotKey`). It needs no permission and no key hook. | An event tap, as Agares uses: needs Accessibility just to see the hotkey, and puts Vassago in the path of every keystroke. |
 | Default hotkey | **Control+Command+V**, recordable in the panel: pinky, thumb and index finger of one hand. | Control+Option+V, the first default: an awkward stretch for one hand. Control+` (Ditto's default): VS Code's terminal toggle. Command+Shift+V: paste and match style in many apps. |
 | Watching the clipboard | **Ask for the clipboard's change counter every 0.3 seconds** on a background queue, and read the contents only when it has moved. macOS has no notification for a clipboard change. | A slower poll, such as Agares's 2-second tick: two copies made inside one interval would record only the second. |
+| Clearing the macOS clipboard | **Off by default. When set, the clipboard is emptied once it has held the same thing for 1, 5, 10 or 30 minutes, or 1 hour** (added 2026-11-27). The 0.3-second tick that already reads the change counter asks the rule, and the clip stays in the history. | A timer of its own: a second source of wake-ups for one comparison. Counting by uptime: the hours a Mac sleeps would not count, and a copy could wait on the clipboard overnight. |
 | After a paste | **The list keeps its order, and the picked item stays on the clipboard.** Working down a run of items, each one stays at the number it had. | Moving the pasted item to the top, as Ditto does by default: every paste would renumber the rest. Putting the earlier clipboard back afterwards: needs a guessed delay for the target app to finish pasting. |
 | Secrets | **Skip anything the copying app marks as concealed or transient** (the nspasteboard.org markers, which KeePassXC and 1Password set). | Recognising password managers by name: every one is a new case. |
 | Signing | **The existing "Agares Dev" certificate.** It is already in the login keychain, and the permissions are tied to the signer, so they survive rebuilds. | A new "Vassago Dev" certificate: a second keychain item and a second pair of release secrets for no gain. Ad hoc signing: the Accessibility grant would be lost on every build. |
@@ -36,7 +37,7 @@ Vassago is a separate app from Agares and changes nothing in it. It copies Agare
 
 ### 3.1 Watching
 
-A timer on a background queue reads `NSPasteboard.general.changeCount` every 0.3 seconds. When the number has not moved, nothing else happens. When it has moved, Vassago reads the clipboard if the history is switched on and clipboard access is allowed (section 8), and otherwise only remembers the new number.
+A timer on a background queue reads `NSPasteboard.general.changeCount` every 0.3 seconds. When the number has not moved, nothing else happens but the check of section 3.6. When it has moved, Vassago reads the clipboard if the history is switched on and clipboard access is allowed (section 8), and otherwise only remembers the new number.
 
 A copying app clears the clipboard first, which moves the counter, and writes its data afterwards without moving the counter again. Measured on 2026-11-26 over thirteen scripted copies, a reader that looked the moment the counter moved found the clipboard empty every time, and in one of them it was still empty 50 ms later. So while the clipboard is empty the change does not count as seen, and Vassago looks again on the next tick. The first build counted it as seen at once, and a copy whose data arrived after that look was never recorded.
 
@@ -84,7 +85,28 @@ An image clip and a files clip also get a thumbnail, a PNG made when the clip is
 
 Two clips are the same when the SHA-256 digest of their data is the same. Copying something already in the history removes the older clip and puts the new one at the top.
 
-The history holds at most 100 clips and at most 200 MB of data. When either limit is passed, the oldest clips are dropped until both hold.
+The history holds at most 100 clips and at most 200 MB of data. When either limit is passed, the oldest clips are dropped until both hold. Those are the defaults: both limits can be changed in the panel (section 7.1).
+
+### 3.6 Clearing the macOS clipboard
+
+Added 2026-11-27, and off by default. In the panel the user picks Never, 1, 5, 10 or 30 minutes, or 1 hour (section 7.1). Once the clipboard has held the same thing for that long, Vassago empties it with `clearContents()`. The clip stays in the history, so it can still be picked from the list.
+
+- **On the same tick.** The 0.3-second watch of section 3.1 already reads the change counter, so the rule is asked there and adds no timer. Measured on 2026-11-27 against the running app: a tick costs about 0.11 ms of CPU, which is 0.04% of one core, and emptying the clipboard takes about 0.15 ms, or 1.5 ms with 20 MB on it.
+- **From the last change.** The wait starts when the counter moves: a copy in any app, or a pick from Vassago's list. What is on the clipboard at launch counts from the launch. Switching the setting on does not start a new wait, so a clipboard already older than the time chosen is emptied on the next tick.
+- **By the wall clock.** The hours the Mac sleeps count, so a copy does not outlast a night.
+- **Once.** Emptying moves the counter. Vassago takes the new number as seen, so the empty clipboard is not looked at as a copy, and it is not emptied again until something is copied.
+- **Whatever the other settings.** It runs with the history switched off and without clipboard access: emptying reads nothing.
+
+The rule is a value type with no OS imports:
+
+```swift
+public struct Expiry {
+    // True when the clipboard is to be emptied now. `after` is in the unit of `time`; nil never empties it.
+    public mutating func check(count: Int, at time: Double, after: Double?) -> Bool
+    // The clipboard was emptied, which moved its counter to `count`.
+    public mutating func emptied(count: Int)
+}
+```
 
 ## 4. Storage
 
@@ -118,6 +140,7 @@ public struct History {
     public init(clips: [Clip] = [], maxCount: Int = 100, maxBytes: Int = 200_000_000)
     public private(set) var clips: [Clip]              // newest first
     public mutating func add(_ clip: Clip) -> [Clip]   // the clips this pushed out: a duplicate, or the oldest
+    public mutating func limit(maxCount: Int, maxBytes: Int) -> [Clip]   // new limits: the clips now over them
     public mutating func remove(id: String) -> Clip?
     public mutating func removeAll() -> [Clip]
 }
@@ -128,7 +151,7 @@ public func title(forText text: String) -> String      // section 3.4
 public func reconcile(index: [Clip], files: Set<String>) -> (clips: [Clip], strays: [String])
 ```
 
-Whatever `add`, `remove` and `removeAll` return is what the store deletes from disk. `reconcile` is pure so that the rule that deletes files at launch has a unit test.
+Whatever `add`, `limit`, `remove` and `removeAll` return is what the store deletes from disk. `reconcile` is pure so that the rule that deletes files at launch has a unit test.
 
 ## 5. The list and pasting
 
@@ -138,6 +161,8 @@ The hotkey opens a native menu at the mouse pointer, with every clip, newest fir
 
 ```text
 ┌──────────────────────────────────────┐
+│ ⌕ Type / to search                   │
+│ ──────────────────────────────────── │
 │ ORD-10005                          1 │
 │ ORD-10004                          2 │
 │ ▣ Image 1200 × 800                 3 │
@@ -148,8 +173,15 @@ The hotkey opens a native menu at the mouse pointer, with every clip, newest fir
 ```
 
 - A row shows the title. An image clip and a files clip have their thumbnail in front (section 3.4).
+- The title is cut with … to fit 240 points, about 39 characters, less the width of a thumbnail (added 2026-11-27). A menu is as wide as its widest row: with whole 60-character titles the list measured 562 points, close to a third of a 1920-point screen, and it is now about 300. The menu bar item's list is cut the same way. A search still looks in the whole title. Each cut title is kept by clip id until its clip leaves the history, so only the first opening after launch measures them. With every title 60 characters long, that opening took 19 ms for 100 clips and 89 ms for 500, and the later ones 6 ms and 30 ms, the same as with uncut titles (measured off screen, 2026-11-27).
 - The nine newest rows have the digits 1 to 9 as key equivalents, with no modifier. Arrow keys and Enter, or a click, pick any row. Esc closes the list.
 - While the list is open and Accessibility is granted, an event tap takes the digit keys and Return before the menu does, closes the menu without its animation, and picks the row. Picked through the menu itself, a row arrives only after the closing animation, about 350 ms later (measured on macOS 27.2.1, 2026-11-26). The tap is removed when the list closes. A click, and the menu bar item's list, still go through the menu.
+- **Search** (added 2026-11-27). The first row reads "Type / to search". It is at the top because that is the one edge of a menu that stays put: with a long history the last row is off the screen, and it would move with every row a search hides. The row is not a text field, which would take the keyboard focus from the app in front. The event tap reads the keys instead and the row shows what was typed, as "Search: ord".
+  - `/` starts a search. Until then every key does what it did before, so hotkey-then-digit is unchanged.
+  - During a search every character is typed, digits and `/` too, and Delete takes one back. The list shows only the clips whose title contains the text, compared as in the panel (section 7.1), and the first nine shown carry ⌘1 to ⌘9.
+  - Return and Enter pick the highlighted row. A menu's highlight cannot be set from code, so with no row highlighted they pick the top match. Command with a digit picks that row. The arrow keys and Esc stay with the menu.
+  - When no clip matches, the row says so. The search ends when the list closes.
+  - The row is left out when the tap is missing (no Accessibility), since nothing could be typed, and when the history is empty. The menu bar item's list has no search.
 - With an empty history the list is one disabled row, "Nothing copied yet".
 - Each missing permission adds a row above the clips, clipboard access first: "Clipboard access is off…", which opens the panel, and "Grant Accessibility to paste directly…", which opens the Settings pane.
 
@@ -186,7 +218,9 @@ One fixed-size window, 420 points wide, in Agares's dark style with ember accent
 ┌──────────────────────────────────────────┐
 │                 Vassago                  │
 │                                          │
-│  ☑ Keep clipboard history                │
+│  ☑ Keep clipboard history [100] [200 MB] │
+│                                          │
+│  Clear the macOS clipboard       [Never] │
 │                                          │
 │  HOTKEY                                  │
 │  (⌃ ⌘ V)                                 │
@@ -194,7 +228,7 @@ One fixed-size window, 420 points wide, in Agares's dark style with ember accent
 │  list.                                   │
 │  [Record…]                               │
 │                                          │
-│  HISTORY                     [Clear All] │
+│  HISTORY  [Search          ] [Clear All] │
 │  ┌────────────────────────────────────┐  │
 │  │ ORD-10005                        × │  │
 │  │ ORD-10004                        × │  │
@@ -203,7 +237,7 @@ One fixed-size window, 420 points wide, in Agares's dark style with ember accent
 │  │ …                                  │  │
 │  └────────────────────────────────────┘  │
 │                                          │
-│  ☑ Launch at login                       │
+│  ☑ Launch at login  [Reset to Defaults…] │
 │                                          │
 │  ● Clipboard access allowed              │
 │  ● Accessibility granted                 │
@@ -212,9 +246,13 @@ One fixed-size window, 420 points wide, in Agares's dark style with ember accent
 ```
 
 - **Keep clipboard history:** on by default, saved as `keepsHistory`. While it is off nothing new is recorded. The clips already kept stay, and can still be pasted.
+- **The two limits** (added 2026-11-27): two small pop-ups in the same row, so the panel is no taller. One sets the most clips kept (25, 50, 100, 200 or 500), the other the most data (50, 100, 200 or 500 MB, or 1 GB). They are saved as `maxClips` and `maxMegabytes`, and a saved value that is not one of the choices counts as the default. A new limit applies at once. When clips have to be deleted to fit it, an alert says how many and asks first, since they cannot be brought back; Cancel leaves the limit as it was.
+- **Clear the macOS clipboard** (added 2026-11-27): a row of its own under the switch, with a small pop-up: Never, or after 1, 5, 10 or 30 minutes, or 1 hour. It is saved as `clearMinutes`, where 0 is Never, and applies at once. Section 3.6 has the rule.
 - **Hotkey:** the current hotkey as keycaps, spelled out in words underneath, and Record… (section 6).
-- **History:** every clip, newest first, in a list six rows high that scrolls. With eight rows the panel measured 819 points tall, too tall for a 900-point screen with the Dock showing; with six it is 751. The rows look as they do in the pop-up list. Clicking a row writes the clip back to the clipboard and highlights the row for a moment; it does not paste, because the panel is the app in front. The × on a row deletes that clip. Clear All deletes every clip after an alert asks to confirm, since it cannot be undone.
+- **History:** every clip, newest first, in a list five rows high that scrolls. With eight rows the panel measured 819 points tall, too tall for a 900-point screen with the Dock showing; with six it was 751. The sixth row went on 2026-11-27 to make room for the clear setting's row, and the panel now comes to about 762: worked out from the rows as measured, not seen. The rows look as they do in the pop-up list. Clicking a row writes the clip back to the clipboard and highlights the row for a moment; it does not paste, because the panel is the app in front. The × on a row deletes that clip. Clear All deletes every clip after an alert asks to confirm, since it cannot be undone.
+- **Search** (added 2026-11-27): a text field in the heading's row, so the panel is no taller. While it holds text, the list shows only the clips whose title contains it, compared as Finder compares names: case and accents do not count, and đ counts as d. Only the title is searched, not the rest of a clip's text, which is on disk and not loaded for the list (section 4). With no clip left the list says "No clip matches". The field is disabled while a hotkey is being recorded, so that a key the recorder ignores is not typed into it. Clear All still deletes every clip, not only the ones shown.
 - **Launch at login:** `SMAppService.mainApp`, as in Agares.
+- **Reset to Defaults…** (added 2026-11-27), in the Launch at login row. It puts back the hotkey (Control+Command+V), the limits (100 clips, 200 MB), the history switch (on), the clearing (Never) and Launch at login (off). An alert lists these and asks first. The alert also says how many of the oldest clips the default limits delete, or that none is. Permissions are not touched. If macOS refuses the standard hotkey, the current one stays, as after a refused recording.
 - **Footer:** one line for each permission, with the buttons of section 8 while it is missing; the version and Check for Updates, as in Agares.
 
 Each row is labelled for VoiceOver with its title and kind, and each × with "Delete" and the title.
@@ -235,7 +273,7 @@ Its menu, top to bottom:
 - Check for Updates…
 - Quit Vassago
 
-The Dock icon, the main menu and the quitting rules are Agares's (control-panel spec, section 6): a Dock icon only while the panel is open, and only the menu bar item's Quit quits, apart from logout, restart and shutdown. The main menu has no Edit menu, since the panel has no text field.
+The Dock icon, the main menu and the quitting rules are Agares's (control-panel spec, section 6): a Dock icon only while the panel is open, and only the menu bar item's Quit quits, apart from logout, restart and shutdown. The main menu has an Edit menu with Cut, Copy, Paste and Select All, which is what gives the panel's search field ⌘X, ⌘C, ⌘V and ⌘A.
 
 ### 7.3 Updates
 
@@ -280,7 +318,7 @@ Observed on macOS 27.2.1 (section 11): a new build that has never asked already 
 ```text
 vassago/
   Package.swift
-  Sources/VassagoEngine/     pure logic, no OS imports: History, Hotkey, Version
+  Sources/VassagoEngine/     pure logic, no OS imports: History, Expiry, Hotkey, ListKeys, Version
   Sources/Vassago/           Clipboard, Store, GlobalHotkey, HistoryMenu, AppModel, StatusMenu, Panel, UpdateCheck, main
   Tests/VassagoEngineTests/
   Resources/                 Info.plist, icon.svg
@@ -295,9 +333,11 @@ One process, a menu bar app (`LSUIElement`), with no telemetry. Bundle id `com.q
 | File | From | What it holds |
 | --- | --- | --- |
 | `Sources/VassagoEngine/History.swift` | New | `Clip`, `History`, `title(forText:)`, `reconcile(index:files:)` (section 4) |
+| `Sources/VassagoEngine/Expiry.swift` | New | When the macOS clipboard is emptied (section 3.6) |
 | `Sources/VassagoEngine/Hotkey.swift` | Agares, cut down | `Modifiers`, `Hotkey` with a key always present, `HotkeyRecorder`, the key labels. No matcher, no modifiers-alone shape, no presets. |
+| `Sources/VassagoEngine/ListKeys.swift` | New | What a key pressed in the open list does: pick a row, start a search, type into it, or stay with the menu (section 5.1) |
 | `Sources/VassagoEngine/Version.swift` | Agares, unchanged | Three-number versions and their ordering |
-| `Sources/Vassago/Clipboard.swift` | New | The 0.3-second watch, the read with its skip rules, the write-back, Command+V |
+| `Sources/Vassago/Clipboard.swift` | New | The 0.3-second watch, the read with its skip rules, the write-back, emptying the clipboard, Command+V |
 | `Sources/Vassago/Store.swift` | New | The index, data and thumbnail files, and the digest |
 | `Sources/Vassago/GlobalHotkey.swift` | New | Registers the hotkey with macOS and calls back when it is pressed |
 | `Sources/Vassago/HistoryMenu.swift` | New | Builds the rows for the pop-up list and the menu bar item |
@@ -317,10 +357,13 @@ Not copied: the Telex engine, `KeyTap`, `Typist`, `scripts/make-cert.sh` (the ce
 
 **Unit tests**, with Swift Testing, run by `bash scripts/test.sh`:
 
-- `History`: a new clip goes to the top; a clip with a known digest replaces the older one and returns it; passing 100 clips returns the oldest; passing 200 MB returns the oldest clips until the total fits; `remove` and `removeAll` return what the store must delete.
+- `History`: a new clip goes to the top; a clip with a known digest replaces the older one and returns it; passing 100 clips returns the oldest; passing 200 MB returns the oldest clips until the total fits; `remove` and `removeAll` return what the store must delete; new limits return the oldest clips over them, keep the newest whatever its size, and hold for the clips added after.
 - `title(forText:)`: leading blank lines, runs of whitespace, a line of exactly 60 characters, a longer line.
+- `shortened(_:toFit:)`: a title that fits is left alone, a wider one keeps its longest beginning that fits, and when nothing fits only the … is left.
 - `reconcile(index:files:)`: a clip whose data file is missing is dropped, and files no kept clip names are listed for deletion.
 - `Hotkey` validity, keycaps and name, the recorder, and `Version`: Agares's tests, less the cases for the parts left out.
+- `Expiry`: the clipboard is emptied once it has held the same thing long enough; a new copy starts the wait again; nothing is emptied while the setting is Never, and switching it on counts from the copy; an emptied clipboard is left alone until the next copy.
+- `ListKeys`: a bare digit picks until a search starts and is typed after; Command with a digit picks only during a search; `/` starts a search and is text inside one; Delete, Return and Enter; arrows, Esc, Tab and other modifiers stay with the menu.
 
 **By hand**, since the rest needs the real clipboard, the permissions and other apps:
 
@@ -339,6 +382,11 @@ Not copied: the Telex engine, `KeyTap`, `Typist`, `scripts/make-cert.sh` (the ce
 | Accessibility withdrawn | A pick only copies |
 | A full-screen app, a second display | The list opens there, at the pointer |
 | Agares running with Vietnamese on | Digits pick, and the paste arrives unconverted |
+| The panel's search | Typing `ord` leaves only the rows with it in their title, `don hang` finds `Đơn hàng`, and ⌘V pastes into the field |
+| The list's search | The hotkey then a digit pastes as before. The hotkey, `/`, then `ord-10` narrows the rows while the menu stays open, and the typed text is readable in the first row. Return pastes the top match, ⌘2 the second, and Delete widens the list again. The address bar keeps its cursor throughout. |
+| The clear setting | With After 1 minute, a copied word is gone from ⌘V a minute later and is still in the list. A second copy inside the minute starts the wait again. With Never nothing is cleared. |
+| Reset to Defaults | With another hotkey recorded, 25 clips, After 5 minutes and Launch at login on, Reset puts all four back after its alert, and names the clips it deletes when there are more than 100. Cancel changes nothing. |
+| The list's search with Agares on | Letters typed after `/` reach the search, with Vietnamese switched on and off |
 
 ## 11. To settle before building
 
@@ -368,7 +416,7 @@ The SDK header says the default is to ask. Why this build is allowed without ask
 
 ## 12. Out of scope
 
-- Type to filter, and any other search
+- Searching a clip's text beyond its title, and a search in the menu bar item's list
 - A paste-next hotkey that works through the clips in the order copied
 - Paste as plain text
 - Pinned or favourite clips, and editing a clip
@@ -391,3 +439,5 @@ The SDK header says the default is to ask. Why this build is allowed without ask
 7. **Spotlight's clipboard history is on on this Mac** and keeps recording independently. The two do not interfere.
 8. **The update check and releases find nothing** until `quyennguyenvu/vassago` is public, has the signing secrets, and has a release tagged `v<version>`.
 9. **Some checks of section 10 were not made by hand.** Checked on 2026-11-26 against the installed app: a pick that pastes in a browser, the panel's controls, five order codes into five tabs, bold text, a screenshot, two Finder files, a KeePassXC password, and picking with Agares on. Not tried: an Office copy, the limit of 100 against the running app (the rule is unit-tested), withdrawing Accessibility, a second display, Universal Clipboard, and anything that needs Vassago listed under Paste from Other Apps. VS Code, Terminal and a full-screen window were tried with the test bench of section 11, not with the finished app.
+10. **The two searches have not been tried in the running app.** The panel's field and the list's search (both added 2026-11-27) were built, and the key rules and the comparison are tested, but nobody has yet watched them work. Open for the list: that rows hide and renumber while the menu is open, that the typed text in the first row is not dimmed, and what reaches the search when Agares is converting.
+11. **The clear setting, Reset to Defaults and the panel's new rows have not been tried in the running app** (all added 2026-11-27). The rule for when the clipboard is emptied is unit-tested, and copies of the two new rows were rendered and measured. Nobody has yet watched the clipboard being emptied, pressed Reset, or seen the whole panel at its new height. Untried too: emptying under a clipboard access setting other than Always Allow.

@@ -42,11 +42,14 @@ final class Clipboard {
     private var timer: DispatchSourceTimer?
     private var seen = 0
     private var recording = false
+    private var expiry = Expiry()
+    /// Seconds the clipboard may hold the same thing before it is emptied. Nil never empties it.
+    private var clearAfter: Double?
 
-    /// Loads the saved clips and starts watching.
-    func start() {
+    /// Loads the saved clips and starts watching. The limits take effect with the next clip recorded.
+    func start(maxCount: Int, maxBytes: Int) {
         queue.async { [self] in
-            history = History(clips: store.load())
+            history = History(clips: store.load(), maxCount: maxCount, maxBytes: maxBytes)
             publish()
             // What is already on the clipboard is not recorded.
             seen = pasteboard.changeCount
@@ -61,6 +64,11 @@ final class Clipboard {
     /// Whether a change is read: the history is switched on and macOS allows the read.
     func setRecording(_ on: Bool) {
         queue.async { self.recording = on }
+    }
+
+    /// How long the Mac's clipboard may hold the same thing before it is emptied. 0 never empties it.
+    func setClearing(afterMinutes minutes: Int) {
+        queue.async { self.clearAfter = minutes > 0 ? Double(minutes) * 60 : nil }
     }
 
     /// One read, made so that macOS shows its prompt and lists Vassago in System Settings.
@@ -99,6 +107,11 @@ final class Clipboard {
         queue.async { [self] in drop(history.removeAll()) }
     }
 
+    /// New limits for the history. The clips now over them are deleted.
+    func setLimits(maxCount: Int, maxBytes: Int) {
+        queue.async { [self] in drop(history.limit(maxCount: maxCount, maxBytes: maxBytes)) }
+    }
+
     /// Presses Command+V in the app in front. macOS ignores it unless Accessibility is granted.
     static func pressPaste() {
         let source = CGEventSource(stateID: .combinedSessionState)
@@ -111,6 +124,13 @@ final class Clipboard {
 
     private func poll() {
         let count = pasteboard.changeCount
+        // By the wall clock, so the hours the Mac sleeps count too.
+        if expiry.check(count: count, at: Date().timeIntervalSinceReferenceDate, after: clearAfter) {
+            // Emptying moves the counter; marked as seen, it is not taken for a copy.
+            seen = pasteboard.clearContents()
+            expiry.emptied(count: seen)
+            return
+        }
         guard count != seen else { return }
         guard recording else {
             seen = count

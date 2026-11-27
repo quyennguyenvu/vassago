@@ -21,7 +21,7 @@ A clipboard history for macOS. Copy several things in one place, then paste each
 
 **It skips secrets.** Anything a password manager marks as concealed, as KeePassXC and 1Password do, is never recorded.
 
-**Small and local.** About 1,300 lines of Swift with no third-party code. The only network request Vassago ever makes asks GitHub for the latest release number, at most once a day and when you choose Check for Updates. Nothing you copy leaves your Mac.
+**Small and local.** About 1,700 lines of Swift with no third-party code. The only network request Vassago ever makes asks GitHub for the latest release number, at most once a day and when you choose Check for Updates. Nothing you copy leaves your Mac.
 
 In the Ars Goetia, Vassago is the prince "of the same nature as Agares" whose office is "to declare things past and to come, and to discover all things hid or lost".
 
@@ -78,7 +78,9 @@ gh attestation verify Vassago-<version>.dmg --repo quyennguyenvu/vassago
 
 - **Open the list** with ⌃⌘V. Digits 1 to 9 paste the nine newest clips; the arrow keys and Enter, or a click, reach the rest. Esc closes it.
 - **The menu bar item** shows the nine newest clips too, for the mouse.
-- **Open the panel** from the menu bar item, or by opening Vassago again from Launchpad or Spotlight. It holds the on/off switch, the hotkey, the whole history, Launch at login and Check for Updates. A click on a row copies it back; the × deletes it.
+- **Open the panel** from the menu bar item, or by opening Vassago again from Launchpad or Spotlight. It holds the on/off switch, the limits, the hotkey, the whole history, Launch at login, Reset to Defaults and Check for Updates. A click on a row copies it back; the × deletes it.
+- **Find an older clip** in the open list by pressing `/` and typing. The list narrows to the rows that contain the text, and digits are typed like any other character. Return pastes the top match, ⌘1 to ⌘9 paste the first nine, and Delete takes back a character. Until you press `/`, the digits pick as before. This needs the Accessibility permission. The panel has a **Search** field that narrows its history in the same way.
+- **A search ignores case and accents:** `don hang` finds `Đơn hàng`. Only the line a row shows is searched, not the rest of the clip.
 - **Change the hotkey** with **Record…** in the panel. It must include Control, Option or Command.
 - **Vassago lives in the menu bar.** Its Dock icon is there only while the panel is open.
 - **Closing the panel does not quit Vassago**, and neither do ⌘Q or the Dock's Quit. To quit, click the menu bar item and choose **Quit Vassago**.
@@ -87,6 +89,9 @@ gh attestation verify Vassago-<version>.dmg --repo quyennguyenvu/vassago
 
 - **The history is kept on your disk, not encrypted,** under `~/Library/Application Support/Vassago`, readable only by your account. A password copied from an app that does not mark it as concealed is saved like any other text. Delete it with the × in the panel, or clear everything with **Clear All**.
 - **100 clips or 200 MB**, whichever comes first. The oldest clips make room for new ones. A single copy over 20 MB is not kept.
+- **Change either limit** with the two pop-ups beside **Keep clipboard history** in the panel: 25 to 500 clips, and 50 MB to 1 GB. Lowering a limit deletes the oldest clips that no longer fit, after asking you first.
+- **Vassago can empty the macOS clipboard for you.** Set **Clear the macOS clipboard** in the panel to 1, 5, 10 or 30 minutes, or 1 hour. Once the clipboard has held the same thing that long, Vassago empties it: ⌘V then pastes nothing, and the clip is still in Vassago's list. The wait starts again with every copy and every pick. It is off (**Never**) by default.
+- **Reset to Defaults…** in the panel puts the hotkey, the limits, the switches and the clearing back as a new install has them, after asking. It deletes clips only when the history is over 100 clips or 200 MB, and says how many first. Permissions stay as they are.
 - **Pasting does not reorder the list,** so the numbers stay put while you work through a run of clips.
 - **Copying the same thing again** moves it to the top instead of adding a second row.
 - **Files are remembered by location.** If a file has moved or been deleted, its clip pastes nothing.
@@ -126,7 +131,7 @@ The workflow reads the certificate from two repository secrets, `SIGNING_P12_BAS
 
 | Path | What lives there |
 | --- | --- |
-| `Sources/VassagoEngine` | Pure logic with no imports: the history and its limits, the hotkey rules, version comparison |
+| `Sources/VassagoEngine` | Pure logic with no imports: the history and its limits, when the clipboard is emptied, the keys of the open list, the hotkey rules, version comparison |
 | `Sources/Vassago` | The app: clipboard watcher, files on disk, hotkey, the list, menu bar item, panel, update check |
 | `Tests/VassagoEngineTests` | Unit tests for everything in the engine |
 | `scripts` | Test, bundle and release scripts |
