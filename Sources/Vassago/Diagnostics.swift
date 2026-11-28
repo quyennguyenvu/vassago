@@ -118,13 +118,14 @@ enum Diagnostics {
     }
 
     private static func ownFacts() -> [Fact] {
-        let (idle, lastApp) = lock.withLock { (Date().timeIntervalSince(lastLook), lastApp) }
+        // Not named lastApp: Swift before 6.4 takes the name inside the closure for this local, and fails.
+        let (idle, app) = lock.withLock { (Date().timeIntervalSince(lastLook), lastApp) }
         let secure = secureInputNow()
         return [
             // The watcher looks every 0.3 seconds.
             Fact(name: "Watcher", value: idle < 3 ? "running" : "STALLED for \(Int(idle)) s", fine: idle < 3),
             Fact(name: "Secure Input", value: secure, fine: secure == "off"),
-            Fact(name: "Last app", value: lastApp, fine: nil),
+            Fact(name: "Last app", value: app, fine: nil),
         ]
     }
 
