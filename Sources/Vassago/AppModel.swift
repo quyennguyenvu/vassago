@@ -8,6 +8,7 @@ final class AppModel: ObservableObject {
     @Published var keepsHistory: Bool {
         didSet {
             UserDefaults.standard.set(keepsHistory, forKey: "keepsHistory")
+            Diagnostics.note("[settings] history \(keepsHistory ? "on" : "off")")
             if keepsHistory, access == .neverAsked { clipboard.ask() }
             refreshRecording()
             stateChanged()
@@ -34,6 +35,7 @@ final class AppModel: ObservableObject {
     @Published var clearMinutes: Int {
         didSet {
             defaults.set(clearMinutes, forKey: "clearMinutes")
+            Diagnostics.note("[settings] clear the clipboard \(clearMinutes == 0 ? "never" : "after \(clearMinutes) min")")
             clipboard.setClearing(afterMinutes: clearMinutes)
         }
     }
@@ -59,6 +61,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var availableVersion: Version? {
         didSet { stateChanged() }
     }
+
+    /// What the diagnostics page shows while it is open; nil while the settings show.
+    @Published private(set) var diagnostics: Diagnostics.Page?
 
     /// The clip a click in the panel has just copied, for a moment.
     @Published private(set) var copied: String?
@@ -97,6 +102,9 @@ final class AppModel: ObservableObject {
 
     /// Loads the history, registers the hotkey, asks for the permissions once, and starts watching both.
     func start() {
+        Diagnostics.onNote = { [weak self] in self?.refreshDiagnostics() }
+        Diagnostics.note("[settings] \(settingsLine)")
+        Diagnostics.note("[perm] clipboard access \(access.rawValue) · accessibility \(trusted ? "granted" : "missing")")
         clipboard.onChange = { [weak self] clips in
             guard let self else { return }
             self.clips = clips
@@ -117,10 +125,62 @@ final class AppModel: ObservableObject {
     /// Both permissions can change in System Settings at any time, so they are read again here.
     private func tick() {
         let trusted = AXIsProcessTrusted()
-        if trusted != self.trusted { self.trusted = trusted }
+        if trusted != self.trusted {
+            Diagnostics.note("[perm] accessibility \(trusted ? "granted" : "withdrawn")")
+            self.trusted = trusted
+        }
         let access = Clipboard.access
-        if access != self.access { self.access = access }
+        if access != self.access {
+            Diagnostics.note("[perm] clipboard access \(access.rawValue), was \(self.access.rawValue)")
+            self.access = access
+        }
+        Diagnostics.tick()
+        refreshDiagnostics()
         checkForUpdatesIfDue()
+    }
+
+    // MARK: Diagnostics
+
+    func showDiagnostics() {
+        diagnostics = Diagnostics.page(facts: facts)
+    }
+
+    func hideDiagnostics() {
+        diagnostics = nil
+    }
+
+    /// Keeps an open page current. Called when a line is written and on every tick.
+    private func refreshDiagnostics() {
+        guard diagnostics != nil else { return }
+        let page = Diagnostics.page(facts: facts)
+        if page != diagnostics { diagnostics = page }
+    }
+
+    /// Puts the diagnostics report on the clipboard. It is not recorded in the history.
+    func copyDiagnostics() {
+        clipboard.put(text: Diagnostics.report(settings: settingsLine, facts: facts))
+    }
+
+    private var settingsLine: String {
+        "history \(keepsHistory ? "on" : "off") · \(maxClips) clips · \(maxMegabytes) MB"
+            + " · clear the clipboard \(clearMinutes == 0 ? "never" : "after \(clearMinutes) min")"
+            + " · hotkey \(hotkey.name) · launch at login \(launchAtLogin ? "on" : "off")"
+    }
+
+    /// What is true right now, and whether each is as it should be.
+    private var facts: [Diagnostics.Fact] {
+        let megabytes = String(format: "%.1f", Double(clips.reduce(0) { $0 + $1.bytes }) / 1_000_000)
+        let registered = globalHotkey.isRegistered
+        return [
+            Diagnostics.Fact(name: "Clipboard access", value: access.rawValue, fine: access == .allowed),
+            Diagnostics.Fact(name: "Accessibility", value: trusted ? "granted" : "MISSING", fine: trusted),
+            Diagnostics.Fact(
+                name: "Hotkey", value: recording ? "being recorded" : registered ? hotkey.name : "\(hotkey.name) NOT REGISTERED",
+                fine: recording || registered),
+            Diagnostics.Fact(
+                name: "History", value: "\(keepsHistory ? "on" : "OFF"), \(clips.count) of \(maxClips) clips, \(megabytes) of \(maxMegabytes) MB",
+                fine: keepsHistory),
+        ]
     }
 
     private func refreshRecording() {
@@ -137,7 +197,9 @@ final class AppModel: ObservableObject {
                 return
             }
             if paste {
-                if AXIsProcessTrusted() { Clipboard.pressPaste() }
+                let trusted = AXIsProcessTrusted()
+                if trusted { Clipboard.pressPaste() }
+                Diagnostics.note("[pick] \(trusted ? "pressed Command+V" : "not pasted, no Accessibility") · in front \(Diagnostics.front)")
             } else {
                 self?.flash(clip.id)
             }
@@ -192,6 +254,7 @@ final class AppModel: ObservableObject {
         self.maxMegabytes = maxMegabytes
         defaults.set(maxClips, forKey: "maxClips")
         defaults.set(maxMegabytes, forKey: "maxMegabytes")
+        Diagnostics.note("[settings] limits \(maxClips) clips · \(maxMegabytes) MB")
         clipboard.setLimits(maxCount: maxClips, maxBytes: maxMegabytes * 1_000_000)
     }
 
@@ -208,6 +271,7 @@ final class AppModel: ObservableObject {
         alert.addButton(withTitle: "Reset")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Diagnostics.note("[settings] reset to defaults")
         keepsHistory = true
         applyLimits(Self.standardClips, Self.standardMegabytes)
         clearMinutes = 0
@@ -235,6 +299,7 @@ final class AppModel: ObservableObject {
         guard !recording else { return }
         recording = true
         hotkeyRefused = false
+        Diagnostics.note("[hotkey] recording a new shortcut, \(hotkey.name) unregistered meanwhile")
         // Unregistered meanwhile, so that pressing the current shortcut can be captured too.
         globalHotkey.unregister()
         recorder = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -256,6 +321,7 @@ final class AppModel: ObservableObject {
         if let recorder { NSEvent.removeMonitor(recorder) }
         recorder = nil
         recording = false
+        if captured == nil { Diagnostics.note("[hotkey] recording cancelled") }
         if let captured, globalHotkey.register(captured) {
             hotkey = captured
         } else {
@@ -306,8 +372,10 @@ final class AppModel: ObservableObject {
             try reset.run()
             reset.waitUntilExit()
             cleared = reset.terminationStatus == 0
+            Diagnostics.note("[perm] accessibility reset: tccutil exited with \(reset.terminationStatus)")
         } catch {
             cleared = false
+            Diagnostics.note("[perm] accessibility reset: tccutil did not run: \(Diagnostics.cause(error))")
         }
         if !cleared {
             let alert = NSAlert()
@@ -335,9 +403,11 @@ final class AppModel: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
+            Diagnostics.note("[login] launch at login failed: \(Diagnostics.cause(error))")
             NSAlert(error: error).runModal()
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+        Diagnostics.note("[settings] launch at login \(launchAtLogin ? "on" : "off"), asked for \(on ? "on" : "off")")
     }
 
     /// A check the user asked for: always answered with an alert.

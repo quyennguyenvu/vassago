@@ -7,8 +7,8 @@ import VassagoEngine
 /// Everything that touches the clipboard or the disk runs on one background queue, never on the main thread.
 final class Clipboard {
     /// What macOS lets Vassago do with the clipboard when nobody pressed Paste.
-    enum Access {
-        case allowed, neverAsked, notAllowed
+    enum Access: String {
+        case allowed, neverAsked = "never asked", notAllowed = "NOT ALLOWED"
     }
 
     /// Privacy & Security → Paste from Other Apps.
@@ -41,6 +41,11 @@ final class Clipboard {
     private var history = History()
     private var timer: DispatchSourceTimer?
     private var seen = 0
+    /// The change last found with nothing on the clipboard, so the wait for its data is noted once.
+    private var foundEmpty = 0
+    /// The longest wait between two looks since one was last noted, and when that was.
+    private var longestGap = 0.0
+    private var gapNoted = Date.distantPast
     private var recording = false
     private var expiry = Expiry()
     /// Seconds the clipboard may hold the same thing before it is emptied. Nil never empties it.
@@ -53,6 +58,7 @@ final class Clipboard {
             publish()
             // What is already on the clipboard is not recorded.
             seen = pasteboard.changeCount
+            Diagnostics.note("[clip] watching from change \(seen) · limits \(maxCount) clips, \(maxBytes) bytes")
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + 0.3, repeating: 0.3)
             timer.setEventHandler { [weak self] in self?.poll() }
@@ -63,7 +69,10 @@ final class Clipboard {
 
     /// Whether a change is read: the history is switched on and macOS allows the read.
     func setRecording(_ on: Bool) {
-        queue.async { self.recording = on }
+        queue.async { [self] in
+            if on != recording { Diagnostics.note("[clip] recording \(on ? "on" : "off")") }
+            recording = on
+        }
     }
 
     /// How long the Mac's clipboard may hold the same thing before it is emptied. 0 never empties it.
@@ -73,13 +82,17 @@ final class Clipboard {
 
     /// One read, made so that macOS shows its prompt and lists Vassago in System Settings.
     func ask() {
-        queue.async { _ = self.pasteboard.string(forType: .string) }
+        queue.async { [self] in
+            _ = pasteboard.string(forType: .string)
+            Diagnostics.note("[perm] made the one read that asks macOS for clipboard access")
+        }
     }
 
     /// Puts the clip back on the clipboard, then calls `done` on the main thread: false when its data is gone.
     func put(_ clip: Clip, done: @escaping (Bool) -> Void) {
         queue.async { [self] in
             guard let payload = store.payload(of: clip.id) else {
+                Diagnostics.note("[pick] \(clip.kind.rawValue) \(clip.id.prefix(8)): its data is gone, clip dropped")
                 drop(history.remove(id: clip.id).map { [$0] } ?? [])
                 DispatchQueue.main.async { done(false) }
                 return
@@ -93,57 +106,115 @@ final class Clipboard {
             }
             // The marker keeps the watcher from recording this write, so the list keeps its order.
             items.first?.setString("1", forType: Self.own)
-            pasteboard.clearContents()
-            pasteboard.writeObjects(items)
+            let count = pasteboard.clearContents()
+            let written = pasteboard.writeObjects(items)
+            Diagnostics.note("[pick] \(clip.kind.rawValue) \(clip.id.prefix(8)) · \(clip.bytes) bytes · "
+                + (written ? "put on the clipboard as change \(count)" : "macOS REFUSED the write, the clipboard is empty"))
             DispatchQueue.main.async { done(true) }
         }
     }
 
+    /// Puts plain text on the clipboard without recording it: the diagnostics report.
+    func put(text: String) {
+        queue.async { [self] in
+            let item = NSPasteboardItem()
+            item.setString(text, forType: .string)
+            item.setString("1", forType: Self.own)
+            pasteboard.clearContents()
+            pasteboard.writeObjects([item])
+        }
+    }
+
     func delete(_ clip: Clip) {
-        queue.async { [self] in drop(history.remove(id: clip.id).map { [$0] } ?? []) }
+        queue.async { [self] in
+            let gone = history.remove(id: clip.id).map { [$0] } ?? []
+            Diagnostics.note("[history] \(clip.kind.rawValue) \(clip.id.prefix(8)) \(gone.isEmpty ? "was to be deleted, but is not in the history" : "deleted") · \(history.clips.count) kept")
+            drop(gone)
+        }
     }
 
     func clear() {
-        queue.async { [self] in drop(history.removeAll()) }
+        queue.async { [self] in
+            let gone = history.removeAll()
+            Diagnostics.note("[history] cleared \(gone.count) clips")
+            drop(gone)
+        }
     }
 
     /// New limits for the history. The clips now over them are deleted.
     func setLimits(maxCount: Int, maxBytes: Int) {
-        queue.async { [self] in drop(history.limit(maxCount: maxCount, maxBytes: maxBytes)) }
+        queue.async { [self] in
+            let gone = history.limit(maxCount: maxCount, maxBytes: maxBytes)
+            Diagnostics.note("[history] limits \(maxCount) clips, \(maxBytes) bytes pushed out \(gone.count) · \(history.clips.count) kept")
+            drop(gone)
+        }
     }
 
     /// Presses Command+V in the app in front. macOS ignores it unless Accessibility is granted.
     static func pressPaste() {
         let source = CGEventSource(stateID: .combinedSessionState)
         for keyDown in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: keyDown)
-            event?.flags = .maskCommand
-            event?.post(tap: .cgSessionEventTap)
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: keyDown) else {
+                Diagnostics.note("[pick] macOS made no key event for Command+V")
+                return
+            }
+            event.flags = .maskCommand
+            event.post(tap: .cgSessionEventTap)
         }
     }
 
+    /// One look, timed: a late or slow one is how two quick copies become one clip.
     private func poll() {
+        let started = Date()
+        longestGap = max(longestGap, Diagnostics.looked(at: started))
+        // At most once a minute: looks held back by macOS would otherwise write a line each.
+        if longestGap > 2, started.timeIntervalSince(gapNoted) > 60 {
+            Diagnostics.note("[clip] no look at the clipboard for \(Int(longestGap)) s")
+            longestGap = 0
+            gapNoted = started
+        }
+        look()
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        if ms > 100 { Diagnostics.note("[clip] slow look: \(ms) ms") }
+    }
+
+    private func look() {
         let count = pasteboard.changeCount
         // By the wall clock, so the hours the Mac sleeps count too.
         if expiry.check(count: count, at: Date().timeIntervalSinceReferenceDate, after: clearAfter) {
             // Emptying moves the counter; marked as seen, it is not taken for a copy.
             seen = pasteboard.clearContents()
             expiry.emptied(count: seen)
+            Diagnostics.note("[clip] emptied the clipboard, unchanged for \(Int((clearAfter ?? 0) / 60)) min · now change \(seen)")
             return
         }
         guard count != seen else { return }
         guard recording else {
+            Diagnostics.note("[clip] change \(count) not read: recording is off")
             seen = count
             return
         }
         // A copying app clears the clipboard, which moves the counter, and writes a moment later
         // without moving it again. So an empty clipboard is looked at again on the next tick.
-        guard let types = pasteboard.types, !types.isEmpty else { return }
+        guard let types = pasteboard.types, !types.isEmpty else {
+            if foundEmpty != count { Diagnostics.note("[clip] change \(count): nothing on the clipboard yet, looking again") }
+            foundEmpty = count
+            return
+        }
         seen = count
-        guard let (payload, clip, thumbnail) = read() else { return }
+        guard let (payload, clip, thumbnail) = read(change: count) else { return }
         // Data first and the index after, so the index never names data that is not there.
         guard store.write(payload, thumbnail: thumbnail, id: clip.id) else { return }
-        drop(history.add(clip))
+        let gone = history.add(clip)
+        let kept = Set(payload.flatMap(\.keys)).sorted().joined(separator: ", ")
+        Diagnostics.note("[clip] change \(count) recorded as \(clip.kind.rawValue) \(clip.id.prefix(8)) · \(clip.bytes) bytes in \(payload.count) items · \(kept) · from \(Diagnostics.front) · pushed out \(gone.count) · \(history.clips.count) kept")
+        drop(gone)
+    }
+
+    /// Notes why a change is not kept, by the names of its types and never by what it holds.
+    private func skip(_ change: Int, _ why: String) -> (Payload, Clip, Data?)? {
+        Diagnostics.note("[clip] change \(change) skipped: \(why) · from \(Diagnostics.front)")
+        return nil
     }
 
     /// Saves the index, deletes the files of the clips that left, and tells the main thread.
@@ -159,8 +230,9 @@ final class Clipboard {
     }
 
     /// What is on the clipboard as a clip to keep, or nil when it is to be skipped.
-    private func read() -> (Payload, Clip, Data?)? {
-        guard !(pasteboard.types ?? []).contains(where: { Self.skipped.contains($0.rawValue) }) else { return nil }
+    private func read(change: Int) -> (Payload, Clip, Data?)? {
+        let offered = (pasteboard.types ?? []).map(\.rawValue)
+        if let marker = offered.first(where: Self.skipped.contains) { return skip(change, "marked \(marker)") }
         var payload: Payload = []
         var files: [URL] = []
         var text: String?
@@ -189,7 +261,10 @@ final class Clipboard {
             if !kept.isEmpty { payload.append(kept) }
         }
         let bytes = payload.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.count } }
-        guard !payload.isEmpty, bytes <= Self.largest else { return nil }
+        guard !payload.isEmpty else {
+            return skip(change, "nothing to keep among \(offered.map(DiagnosticLog.clean).joined(separator: ", "))")
+        }
+        guard bytes <= Self.largest else { return skip(change, "\(bytes) bytes, and the most kept is \(Self.largest)") }
 
         let kind: Clip.Kind
         let title: String
@@ -206,7 +281,9 @@ final class Clipboard {
             guard let image, let source = CGImageSourceCreateWithData(image as CFData, nil),
                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                   let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                  let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+                return skip(change, "its image could not be read")
+            }
             kind = .image
             title = "Image \(width) × \(height)"
             // At most 128 pixels on its longer side.

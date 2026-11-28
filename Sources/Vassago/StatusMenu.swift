@@ -19,6 +19,7 @@ final class StatusMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.stateChanged = { [weak self] in self?.refreshTitle() }
         model.onHotkey = { [weak self] in self?.historyMenu.popUp() }
         model.openPanel = { [weak self] in self?.panel.show() }
+        Diagnostics.start()
         model.start()
         refreshTitle()
         if model.cannotRecord || !model.trusted { panel.show() }
@@ -43,6 +44,7 @@ final class StatusMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
         add("Open Vassago…", #selector(openPanel), to: menu)
         add("Clear History…", #selector(clearHistory), to: menu)
         add("Check for Updates…", #selector(checkForUpdates), to: menu)
+        add("Diagnostics…", #selector(openDiagnostics), to: menu)
         menu.addItem(.separator())
         add("Quit Vassago", #selector(quit), to: menu)
     }
@@ -63,6 +65,11 @@ final class StatusMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.checkForUpdates()
     }
 
+    @objc private func openDiagnostics() {
+        model.showDiagnostics()
+        panel.show()
+    }
+
     @objc private func openReleasePage() {
         model.openReleasePage()
     }
@@ -80,7 +87,11 @@ final class StatusMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if quitFromMenu || Self.systemIsShuttingDown() { return .terminateNow }
+        if quitFromMenu || Self.systemIsShuttingDown() {
+            // In the unified log, a start with no quit before it was a crash or a force-quit.
+            Diagnostics.note("[app] quitting")
+            return .terminateNow
+        }
         // The Dock's Quit, like any other request to quit, only puts the panel away.
         panel.close()
         return .terminateCancel

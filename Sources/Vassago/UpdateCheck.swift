@@ -14,11 +14,22 @@ enum UpdateCheck {
     /// and with whether GitHub answered at all.
     static func latest(_ done: @escaping (_ latest: Version?, _ answered: Bool) -> Void) {
         let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
-        URLSession.shared.dataTask(with: url) { data, response, _ in
+        URLSession.shared.dataTask(with: url) { data, response, error in
             let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
             let latest = (json?["tag_name"] as? String).flatMap(Version.init)
-            DispatchQueue.main.async { done(latest, response != nil) }
+            let status = (response as? HTTPURLResponse)?.statusCode
+            DispatchQueue.main.async {
+                Diagnostics.note(latest.map { "[update] latest release is \($0.text)" } ?? "[update] check failed: \(cause(error, status))")
+                done(latest, response != nil)
+            }
         }.resume()
+    }
+
+    /// Why a check named no version, from codes alone.
+    private static func cause(_ error: Error?, _ status: Int?) -> String {
+        if let error { return Diagnostics.cause(error) }
+        if let status, status != 200 { return "HTTP \(status)" }
+        return "no version in the response"
     }
 
     static func releasePage(for version: Version) -> URL {

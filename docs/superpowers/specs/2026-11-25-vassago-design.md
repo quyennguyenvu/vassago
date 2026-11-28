@@ -271,6 +271,7 @@ Its menu, top to bottom:
 - Open Vassago…
 - Clear History… (with the same confirmation as Clear All)
 - Check for Updates…
+- Diagnostics… (added 2026-11-27, section 7.4)
 - Quit Vassago
 
 The Dock icon, the main menu and the quitting rules are Agares's (control-panel spec, section 6): a Dock icon only while the panel is open, and only the menu bar item's Quit quits, apart from logout, restart and shutdown. The main menu has an Edit menu with Cut, Copy, Paste and Select All, which is what gives the panel's search field ⌘X, ⌘C, ⌘V and ⌘A.
@@ -278,6 +279,39 @@ The Dock icon, the main menu and the quitting rules are Agares's (control-panel 
 ### 7.3 Updates
 
 The update check is Agares's (control-panel spec, section 7), against the repository `quyennguyenvu/vassago`: quiet once a day, and on demand with an alert. Nothing is downloaded or installed. Its key is `nextUpdateCheck`.
+
+### 7.4 Diagnostics
+
+Added 2026-11-27. It follows Agares's diagnostics (Agares diagnostics spec) for the store, the mirror and the page. Vassago records what it did and what went wrong, shows it on a page of the panel, and copies it as text. The log exists for debugging: a copy that was not recorded, or a pick that did not paste, otherwise leaves no trace.
+
+- **What earns a line.** Unlike Agares, routine successes too, because the question is usually "what happened to this copy". One line for each event in the table below, and never one per 0.3-second look.
+- **What is never recorded.** Nothing that was copied: no text, no title, no file name, no search. A line holds sizes, the names of clipboard types, the first eight characters of a clip's id, error domains and codes, and the bundle ids of apps. Text Vassago did not write (bundle ids, type names, error domains) goes through `DiagnosticLog.clean` first, so a line break in it cannot forge a line.
+- **Store.** `DiagnosticLog`, in the engine, is a ring of the newest 500 lines in memory. `Diagnostics`, in the app, stamps each line to the millisecond and appends it under a lock, since the clipboard queue writes lines as well as the main thread.
+- **Mirror.** Each line also goes to the unified log (subsystem `com.quyennguyenvu.vassago`, category `diagnostics`, level notice, marked public), so the history outlives a crash and a restart.
+- **The page** is laid over the panel's settings, which stay underneath and keep the window's size. It has Back, Copy, the state of this moment, then the lines, newest first. It is reached from Diagnostics… in the menu bar menu and from a link in the panel's top right corner, and closing the panel puts it back on its settings. A line written while the page is open appears at once; the state is read again on the two-second tick.
+- **Copy** puts the report on the clipboard: three header lines (version, macOS and uptime; the settings; the state), a blank line, then the ring, oldest first. The write carries Vassago's own marker (section 3.3), so the report is not recorded in the history.
+
+To read the history from Terminal, across launches:
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "com.quyennguyenvu.vassago"' --last 1d --style compact
+```
+
+| Tag | Lines |
+| --- | --- |
+| `[app]` | Started, with the version, macOS and process id; going to sleep; woke from sleep; quitting. A start with no quit before it was a crash or a force-quit. |
+| `[settings]` | Every setting at launch, then each change, and Reset to Defaults |
+| `[perm]` | Both permissions at launch, then each change; the one read that asks for clipboard access; how Reset Permission ended |
+| `[hotkey]` | Registered, or refused with macOS's status; a recording started or cancelled |
+| `[list]` | Opened, with the number of clips, whether its key tap runs, and the app in front; closed, with whether a key picked a row and whether a search ran; the key tap switched off by macOS |
+| `[pick]` | The clip put on the clipboard and the change it became; Command+V pressed and the app in front, or not pasted for want of Accessibility; a clip whose data is gone |
+| `[clip]` | Each change, by the clipboard's counter: recorded (kind, bytes, types kept, app in front, clips pushed out), skipped (the marker; the types offered when none is kept; over 20 MB; an image that cannot be read), not read while recording is off, or found empty. The clipboard emptied (section 3.6). A look that took over 100 ms. Looks more than 2 seconds apart, noted at most once a minute. |
+| `[history]` | A clip deleted, the history cleared, clips pushed out by new limits |
+| `[store]` | What launch loaded, dropped and deleted; an index or a clip that could not be read or written, by error domain and code |
+| `[input]` | macOS Secure Input on, with the app holding it, or off, checked on the tick. While it is on, the list's key tap gets no keys. |
+| `[update]`, `[login]` | The latest release found, or why a check named none; a login item that could not be changed |
+
+The state on the page and in the report's `Now:` line: clipboard access, Accessibility, the hotkey (registered or not), the history (on or off, clips and megabytes against their limits), the watcher (running, or stalled when it has not looked for 3 seconds), Secure Input, and the app most recently in front other than Vassago.
 
 ## 8. Permissions and failure handling
 
@@ -318,8 +352,8 @@ Observed on macOS 27.2.1 (section 11): a new build that has never asked already 
 ```text
 vassago/
   Package.swift
-  Sources/VassagoEngine/     pure logic, no OS imports: History, Expiry, Hotkey, ListKeys, Version
-  Sources/Vassago/           Clipboard, Store, GlobalHotkey, HistoryMenu, AppModel, StatusMenu, Panel, UpdateCheck, main
+  Sources/VassagoEngine/     pure logic, no OS imports: History, Expiry, Hotkey, ListKeys, Version, DiagnosticLog
+  Sources/Vassago/           Clipboard, Store, GlobalHotkey, HistoryMenu, AppModel, StatusMenu, Panel, UpdateCheck, Diagnostics, main
   Tests/VassagoEngineTests/
   Resources/                 Info.plist, icon.svg
   scripts/test.sh            runs the tests
@@ -337,6 +371,7 @@ One process, a menu bar app (`LSUIElement`), with no telemetry. Bundle id `com.q
 | `Sources/VassagoEngine/Hotkey.swift` | Agares, cut down | `Modifiers`, `Hotkey` with a key always present, `HotkeyRecorder`, the key labels. No matcher, no modifiers-alone shape, no presets. |
 | `Sources/VassagoEngine/ListKeys.swift` | New | What a key pressed in the open list does: pick a row, start a search, type into it, or stay with the menu (section 5.1) |
 | `Sources/VassagoEngine/Version.swift` | Agares, unchanged | Three-number versions and their ordering |
+| `Sources/VassagoEngine/DiagnosticLog.swift` | Agares, 500 lines for 200 | The ring, the report text, `clean`, and a stored line taken apart for the page (section 7.4) |
 | `Sources/Vassago/Clipboard.swift` | New | The 0.3-second watch, the read with its skip rules, the write-back, emptying the clipboard, Command+V |
 | `Sources/Vassago/Store.swift` | New | The index, data and thumbnail files, and the digest |
 | `Sources/Vassago/GlobalHotkey.swift` | New | Registers the hotkey with macOS and calls back when it is pressed |
@@ -345,6 +380,7 @@ One process, a menu bar app (`LSUIElement`), with no telemetry. Bundle id `com.q
 | `Sources/Vassago/StatusMenu.swift` | Agares, adapted | The menu bar item, the Dock and quit rules |
 | `Sources/Vassago/Panel.swift` | Agares's window, palette, keycaps and footer | The body of section 7.1 |
 | `Sources/Vassago/UpdateCheck.swift` | Agares, repository name changed | The GitHub request and its alert |
+| `Sources/Vassago/Diagnostics.swift` | Agares, adapted | The one ring behind a lock, the unified-log mirror, the state that only it can read (the watcher's last look, Secure Input, the app in front), the sleep and wake observers |
 | `main.swift`, `Info.plist`, `scripts/`, `.github/` | Agares, renamed | |
 
 Not copied: the Telex engine, `KeyTap`, `Typist`, `scripts/make-cert.sh` (the certificate already exists; Agares's script makes it on another Mac) and `scripts/sync-plans.py`.
@@ -363,6 +399,7 @@ Not copied: the Telex engine, `KeyTap`, `Typist`, `scripts/make-cert.sh` (the ce
 - `reconcile(index:files:)`: a clip whose data file is missing is dropped, and files no kept clip names are listed for deletion.
 - `Hotkey` validity, keycaps and name, the recorder, and `Version`: Agares's tests, less the cases for the parts left out.
 - `Expiry`: the clipboard is emptied once it has held the same thing long enough; a new copy starts the wait again; nothing is emptied while the setting is Never, and switching it on counts from the copy; an emptied clipboard is left alone until the next copy.
+- `DiagnosticLog`: Agares's tests. The ring keeps the newest 500 lines; the report puts the header first and the lines oldest first; `clean` drops line breaks and anything outside its set, and clips at 80; a stored line is taken apart, a line of another shape is refused, and the stamp shows the time for today and the day for an earlier date.
 - `ListKeys`: a bare digit picks until a search starts and is typed after; Command with a digit picks only during a search; `/` starts a search and is text inside one; Delete, Return and Enter; arrows, Esc, Tab and other modifiers stay with the menu.
 
 **By hand**, since the rest needs the real clipboard, the permissions and other apps:
@@ -385,6 +422,7 @@ Not copied: the Telex engine, `KeyTap`, `Typist`, `scripts/make-cert.sh` (the ce
 | The panel's search | Typing `ord` leaves only the rows with it in their title, `don hang` finds `Đơn hàng`, and ⌘V pastes into the field |
 | The list's search | The hotkey then a digit pastes as before. The hotkey, `/`, then `ord-10` narrows the rows while the menu stays open, and the typed text is readable in the first row. Return pastes the top match, ⌘2 the second, and Delete widens the list again. The address bar keeps its cursor throughout. |
 | The clear setting | With After 1 minute, a copied word is gone from ⌘V a minute later and is still in the list. A second copy inside the minute starts the wait again. With Never nothing is cleared. |
+| Diagnostics | Run on 2026-11-27. A copy marked concealed, a copy of an unknown type, an emptied clipboard and an ordinary copy each leave their `[clip]` line. The hotkey then a digit leaves `[list] opened`, `[list] closed`, and two `[pick]` lines. The page shows them newest first, Back returns to the settings, and Copy puts the report on the clipboard without adding a clip. The `log show` command of section 7.4 prints the same lines from earlier launches. |
 | Reset to Defaults | With another hotkey recorded, 25 clips, After 5 minutes and Launch at login on, Reset puts all four back after its alert, and names the clips it deletes when there are more than 100. Cancel changes nothing. |
 | The list's search with Agares on | Letters typed after `/` reach the search, with Vietnamese switched on and off |
 
@@ -441,3 +479,4 @@ The SDK header says the default is to ask. Why this build is allowed without ask
 9. **Some checks of section 10 were not made by hand.** Checked on 2026-11-26 against the installed app: a pick that pastes in a browser, the panel's controls, five order codes into five tabs, bold text, a screenshot, two Finder files, a KeePassXC password, and picking with Agares on. Not tried: an Office copy, the limit of 100 against the running app (the rule is unit-tested), withdrawing Accessibility, a second display, Universal Clipboard, and anything that needs Vassago listed under Paste from Other Apps. VS Code, Terminal and a full-screen window were tried with the test bench of section 11, not with the finished app.
 10. **The two searches have not been tried in the running app.** The panel's field and the list's search (both added 2026-11-27) were built, and the key rules and the comparison are tested, but nobody has yet watched them work. Open for the list: that rows hide and renumber while the menu is open, that the typed text in the first row is not dimmed, and what reaches the search when Agares is converting.
 11. **The clear setting, Reset to Defaults and the panel's new rows have not been tried in the running app** (all added 2026-11-27). The rule for when the clipboard is emptied is unit-tested, and copies of the two new rows were rendered and measured. Nobody has yet watched the clipboard being emptied, pressed Reset, or seen the whole panel at its new height. Untried too: emptying under a clipboard access setting other than Always Allow.
+12. **The diagnostics name apps and sizes.** Each copy leaves a line with its size, its clipboard types and the app in front, in memory and in the macOS unified log, which macOS keeps on disk for some days. Nothing that was copied is in it, and the README says what the report holds.

@@ -25,7 +25,10 @@ final class HistoryMenu: NSObject {
     /// Opens the whole history at the mouse pointer. A menu leaves the keyboard focus with the app in front.
     func popUp() {
         // The hotkey still arrives while the list is open.
-        guard list == nil else { return }
+        guard list == nil else {
+            Diagnostics.note("[list] hotkey pressed while the list is open, ignored")
+            return
+        }
         let menu = NSMenu()
         addPermissionRows(to: menu)
         let tap = keyTap()
@@ -39,9 +42,11 @@ final class HistoryMenu: NSObject {
         // Otherwise the list gets narrower each time a search hides its widest row.
         menu.minimumWidth = menu.size.width
         list = menu
+        Diagnostics.note("[list] opened by the hotkey: \(model.clips.count) clips · key tap \(tap != nil ? "on" : AXIsProcessTrusted() ? "REFUSED by macOS" : "off, no Accessibility") · in front \(Diagnostics.front)")
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         // Invalidating the tap also takes it off the run loop.
         if let tap { CFMachPortInvalidate(tap) }
+        Diagnostics.note("[list] closed: \(picked == nil ? "no row picked by key" : "a row picked by key")\(query == nil ? "" : " · after a search")")
         list = nil
         searchRow = nil
         query = nil
@@ -60,6 +65,9 @@ final class HistoryMenu: NSObject {
             eventsOfInterest: 1 << CGEventType.keyDown.rawValue,
             callback: { _, type, event, context in
                 let menu = Unmanaged<HistoryMenu>.fromOpaque(context!).takeUnretainedValue()
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    Diagnostics.note("[list] macOS switched the key tap off (event \(type.rawValue)); the menu's own keys still pick")
+                }
                 return type == .keyDown && menu.take(event) ? nil : Unmanaged.passUnretained(event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return nil }
@@ -162,7 +170,10 @@ final class HistoryMenu: NSObject {
     }
 
     @objc private func pick(_ item: NSMenuItem) {
-        guard let clip = model.clips.first(where: { $0.id == item.representedObject as? String }) else { return }
+        guard let clip = model.clips.first(where: { $0.id == item.representedObject as? String }) else {
+            Diagnostics.note("[pick] the row's clip is no longer in the history")
+            return
+        }
         model.pick(clip, paste: true)
     }
 

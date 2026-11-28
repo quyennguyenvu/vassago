@@ -21,7 +21,7 @@ A clipboard history for macOS. Copy several things in one place, then paste each
 
 **It skips secrets.** Anything a password manager marks as concealed, as KeePassXC and 1Password do, is never recorded.
 
-**Small and local.** About 1,700 lines of Swift with no third-party code. The only network request Vassago ever makes asks GitHub for the latest release number, at most once a day and when you choose Check for Updates. Nothing you copy leaves your Mac.
+**Small and local.** About 2,200 lines of Swift with no third-party code. The only network request Vassago ever makes asks GitHub for the latest release number, at most once a day and when you choose Check for Updates. Nothing you copy leaves your Mac.
 
 In the Ars Goetia, Vassago is the prince "of the same nature as Agares" whose office is "to declare things past and to come, and to discover all things hid or lost".
 
@@ -105,6 +105,16 @@ gh attestation verify Vassago-<version>.dmg --repo quyennguyenvu/vassago
 - **Picking a clip copies but does not paste:** Accessibility is missing. Open the panel and press **Grant Accessibility…**. If Vassago is already switched on there, macOS is holding a permission from an older build: press **Reset Permission** instead, then switch it on again.
 - **The hotkey does nothing:** another app may own that shortcut. Record a different one in the panel.
 
+### Reporting a problem
+
+Click the menu bar item and choose **Diagnostics…**. The panel shows what Vassago did, what it noticed going wrong, and what is true right now. To send it to someone, press **Copy** and paste the text into an [issue](https://github.com/quyennguyenvu/vassago/issues). It holds three things:
+
+- **What happened since Vassago started:** each copy it recorded or skipped and why, each pick, each opening of the list, a permission or a setting that changed, a file it could not write, an update check that failed.
+- **Your settings:** the hotkey, the limits and the switches.
+- **What is true right now:** the two permissions, whether the hotkey is registered, how full the history is, whether the clipboard is being watched, whether macOS Secure Input is on, and the last app you were in.
+
+It never holds anything you copied: no text, no title, no file name, and nothing you typed into a search. For each copy it does hold the size, the kinds of data on the clipboard (such as `public.html`), and the app that was in front. Nothing is sent anywhere. The report leaves your Mac only when you paste it, and copying it does not add it to the history.
+
 ## Developing
 
 You need macOS 13 or newer, a Swift 6 toolchain (the Command Line Tools are enough, no Xcode), and `librsvg` for the icon (`brew install librsvg`).
@@ -112,6 +122,12 @@ You need macOS 13 or newer, a Swift 6 toolchain (the Command Line Tools are enou
 ```sh
 bash scripts/test.sh             # run the tests
 bash scripts/bundle.sh install   # build, sign, copy to /Applications and launch
+```
+
+Every diagnostics line also goes to the macOS unified log, so the history outlives a crash or a restart of the app:
+
+```sh
+/usr/bin/log show --predicate 'subsystem == "com.quyennguyenvu.vassago"' --last 1d --style compact
 ```
 
 Builds are signed with the self-signed "Agares Dev" certificate, the one [Agares](https://github.com/quyennguyenvu/agares) uses, so the Accessibility permission survives every rebuild. Create it once with `scripts/make-cert.sh` from the Agares repository. Releases use that same certificate; a certificate you create yourself is a different signer, so your builds and the released ones do not share a permission.
@@ -131,8 +147,8 @@ The workflow reads the certificate from two repository secrets, `SIGNING_P12_BAS
 
 | Path | What lives there |
 | --- | --- |
-| `Sources/VassagoEngine` | Pure logic with no imports: the history and its limits, when the clipboard is emptied, the keys of the open list, the hotkey rules, version comparison |
-| `Sources/Vassago` | The app: clipboard watcher, files on disk, hotkey, the list, menu bar item, panel, update check |
+| `Sources/VassagoEngine` | Pure logic with no imports: the history and its limits, when the clipboard is emptied, the keys of the open list, the hotkey rules, version comparison, the diagnostics log |
+| `Sources/Vassago` | The app: clipboard watcher, files on disk, hotkey, the list, menu bar item, panel, update check, diagnostics |
 | `Tests/VassagoEngineTests` | Unit tests for everything in the engine |
 | `scripts` | Test, bundle and release scripts |
 | `docs/superpowers` | Design spec and implementation plan |

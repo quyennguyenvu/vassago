@@ -36,6 +36,8 @@ final class Panel: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // The panel opens on its settings next time, and an unseen page stops being refreshed.
+        model.hideDiagnostics()
     }
 
     // A recording left running would keep the hotkey unregistered.
@@ -70,6 +72,25 @@ private struct PanelView: View {
     }
 
     var body: some View {
+        // The settings stay in place under the diagnostics page and keep setting the window's size,
+        // so the window does not jump when the page opens or closes.
+        settings
+            .opacity(model.diagnostics == nil ? 1 : 0)
+            .disabled(model.diagnostics != nil)
+            .accessibilityHidden(model.diagnostics != nil)
+            .overlay {
+                if let page = model.diagnostics {
+                    DiagnosticsPage(page: page, back: model.hideDiagnostics, copy: model.copyDiagnostics)
+                }
+            }
+            .padding(EdgeInsets(top: 40, leading: 28, bottom: 24, trailing: 28))
+            .frame(width: 420)
+            .background(Palette.bg0)
+            .foregroundColor(Palette.text1)
+            .tint(Palette.accent)
+    }
+
+    private var settings: some View {
         VStack(spacing: 22) {
             Text("Vassago")
                 .font(.system(size: 26, weight: .bold, design: .rounded))
@@ -107,11 +128,12 @@ private struct PanelView: View {
             }
             footer
         }
-        .padding(EdgeInsets(top: 40, leading: 28, bottom: 24, trailing: 28))
-        .frame(width: 420)
-        .background(Palette.bg0)
-        .foregroundColor(Palette.text1)
-        .tint(Palette.accent)
+        // In the corner beside the name: the footer's rows are full while a permission is missing.
+        .overlay(alignment: .topTrailing) {
+            Button("Diagnostics ›", action: model.showDiagnostics)
+                .buttonStyle(.link)
+                .font(.system(size: 12))
+        }
     }
 
     private var hotkeySection: some View {
@@ -266,6 +288,70 @@ private struct PanelView: View {
         Circle()
             .fill(ok ? Palette.ok : Palette.warn)
             .frame(width: 8, height: 8)
+    }
+}
+
+/// What Vassago did and noticed going wrong, and what is true right now. Laid over the settings.
+private struct DiagnosticsPage: View {
+    let page: Diagnostics.Page
+    let back: () -> Void
+    let copy: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Button("‹ Back", action: back)
+                Text("DIAGNOSTICS")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Palette.text2)
+                Spacer()
+                Button("Copy", action: copy)
+                    .help("Copies these lines, with the settings and the state above, as text.")
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(page.facts.indices, id: \.self) { index in
+                    fact(page.facts[index])
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Palette.bg1)
+            .cornerRadius(10)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 7) {
+                    ForEach(page.lines.indices, id: \.self) { index in
+                        line(page.lines[index])
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .font(.system(size: 12))
+    }
+
+    /// Amber marks what would explain a copy not recorded or a pick not pasted.
+    private func fact(_ fact: Diagnostics.Fact) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle()
+                .fill(fact.fine.map { $0 ? Palette.ok : Palette.warn } ?? Color.clear)
+                .frame(width: 7, height: 7)
+            Text(fact.name).foregroundColor(Palette.text2)
+            Text(fact.value).textSelection(.enabled)
+        }
+    }
+
+    private func line(_ stored: String) -> some View {
+        let parts = DiagnosticLog.parts(of: stored)
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(parts?.stamp(today: page.today) ?? "")
+                .foregroundColor(Palette.text2)
+                // Room for a time to the millisecond, which is wider than an older line's day and minute.
+                .frame(width: 84, alignment: .leading)
+            (Text(parts.map { "[\($0.tag)] " } ?? "").foregroundColor(Palette.text2) + Text(parts?.text ?? stored))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 11, design: .monospaced))
     }
 }
 

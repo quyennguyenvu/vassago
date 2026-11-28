@@ -31,13 +31,23 @@ final class Store {
 
     /// The clips kept from the last run, less those whose data is gone. Files that no clip names are deleted.
     func load() -> [Clip] {
-        let index = (try? Data(contentsOf: Self.index)).flatMap { try? JSONDecoder().decode([Clip].self, from: $0) } ?? []
+        var index: [Clip] = []
+        do {
+            index = try JSONDecoder().decode([Clip].self, from: Data(contentsOf: Self.index))
+        } catch {
+            // NSCocoaErrorDomain 260 is no file yet, as on a first launch. Anything else lost the history.
+            Diagnostics.note("[store] index not read: \(Diagnostics.cause(error))")
+        }
         // A folder that cannot be listed is left alone, not taken for empty.
-        guard let names = try? files.contentsOfDirectory(atPath: Self.clips.path) else { return index }
+        guard let names = try? files.contentsOfDirectory(atPath: Self.clips.path) else {
+            Diagnostics.note("[store] the clips folder could not be listed · \(index.count) clips in the index")
+            return index
+        }
         let kept = reconcile(index: index, files: Set(names))
         for name in kept.strays {
             try? files.removeItem(at: Self.clips.appendingPathComponent(name))
         }
+        Diagnostics.note("[store] loaded \(kept.clips.count) clips · \(index.count - kept.clips.count) without data dropped · \(kept.strays.count) stray files deleted")
         return kept.clips
     }
 
@@ -49,14 +59,18 @@ final class Store {
             try thumbnail?.write(to: Self.thumbnail(of: id), options: .atomic)
             return true
         } catch {
+            Diagnostics.note("[store] clip \(id.prefix(8)) not written: \(Diagnostics.cause(error))")
             delete([id])
             return false
         }
     }
 
     func save(_ clips: [Clip]) {
-        guard let data = try? JSONEncoder().encode(clips) else { return }
-        try? data.write(to: Self.index, options: .atomic)
+        do {
+            try JSONEncoder().encode(clips).write(to: Self.index, options: .atomic)
+        } catch {
+            Diagnostics.note("[store] index not saved: \(Diagnostics.cause(error))")
+        }
     }
 
     func delete(_ ids: [String]) {

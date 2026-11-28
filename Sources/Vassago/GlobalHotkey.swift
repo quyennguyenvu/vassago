@@ -12,7 +12,7 @@ final class GlobalHotkey {
     init() {
         var pressed = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         // The dispatcher target also delivers the press while a menu is open.
-        InstallEventHandler(
+        let status = InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, _, context in
                 let hotkey = Unmanaged<GlobalHotkey>.fromOpaque(context!).takeUnretainedValue()
@@ -21,6 +21,11 @@ final class GlobalHotkey {
                 return noErr
             },
             1, &pressed, Unmanaged.passUnretained(self).toOpaque(), nil)
+        if status != noErr { Diagnostics.note("[hotkey] no handler for the press: status \(status)") }
+    }
+
+    var isRegistered: Bool {
+        registration != nil
     }
 
     /// False when macOS refuses the shortcut. Nothing is registered then.
@@ -34,6 +39,7 @@ final class GlobalHotkey {
         let id = EventHotKeyID(signature: 0x5641_5353, id: 1)
         let status = RegisterEventHotKey(
             UInt32(hotkey.keyCode), UInt32(modifiers), id, GetEventDispatcherTarget(), 0, &registration)
+        Diagnostics.note(status == noErr ? "[hotkey] registered \(hotkey.name)" : "[hotkey] macOS refused \(hotkey.name): status \(status)")
         return status == noErr
     }
 
